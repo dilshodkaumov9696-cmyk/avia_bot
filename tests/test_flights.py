@@ -1,89 +1,72 @@
 import datetime as dt
 
-from avia_bot.flights import FlightService, parse_date, resolve_city
+from avia_bot.flights import Filters, FlightService, fmt_duration
+from avia_bot.pricing import Passengers
 
+DATE = dt.date(2026, 9, 17)
 TICK = 1000
 
 
-def test_resolve_city_accepts_names_and_codes():
-    assert resolve_city("London") == "LON"
-    assert resolve_city("  new york ") == "NYC"
-    assert resolve_city("TAS") == "TAS"
-    assert resolve_city("Atlantis") is None
-    assert resolve_city("") is None
-
-
-def test_parse_date():
-    assert parse_date("2026-09-05") == dt.date(2026, 9, 5)
-    assert parse_date("not-a-date") is None
-    assert parse_date("2026-13-40") is None
-
-
-def test_search_returns_cheapest_first_and_respects_limit():
-    service = FlightService()
-    results = service.search("LON", "PAR", passengers=1, tick=TICK, limit=3)
-    assert results
-    assert len(results) <= 3
-    prices = [q.price_total for q in results]
+def test_search_sorted_and_labelled():
+    svc = FlightService()
+    res = svc.search("MOW", "LBD", DATE, tick=TICK)
+    assert res
+    prices = [p.price_total for p in res]
     assert prices == sorted(prices)
-    for q in results:
-        assert q.origin == "LON" and q.destination == "PAR"
+    assert sum(p.is_cheapest for p in res) == 1
+    assert sum(p.is_fastest for p in res) == 1
+    assert res[0].is_cheapest  # cheapest sorts first
 
 
-def test_search_filters_by_date():
-    service = FlightService()
-    date = dt.date(2026, 9, 3)
-    results = service.search("LON", "NYC", date=date, tick=TICK)
-    assert results
-    assert all(q.date == date for q in results)
+def test_results_are_deterministic():
+    a = FlightService().search("MOW", "LBD", DATE, tick=TICK)
+    b = FlightService().search("MOW", "LBD", DATE, tick=TICK)
+    assert [p.price_total for p in a] == [p.price_total for p in b]
 
 
-def test_passengers_scale_price():
-    service = FlightService()
-    one = service.cheapest("LON", "PAR", dt.date(2026, 9, 5), passengers=1, tick=TICK)
-    three = service.cheapest("LON", "PAR", dt.date(2026, 9, 5), passengers=3, tick=TICK)
-    assert three.price_total == one.price_total * 3
-    assert three.passengers == 3
+def test_direct_filter():
+    svc = FlightService()
+    direct = svc.search("MOW", "LBD", DATE, tick=TICK, filters=Filters(direct_only=True))
+    assert direct
+    assert all(p.itinerary.is_direct for p in direct)
 
 
-def test_search_unknown_route_is_empty():
-    service = FlightService()
-    assert service.search("LON", "SIN", tick=TICK) == []
+def test_baggage_filter():
+    svc = FlightService()
+    bag = svc.search("MOW", "LBD", DATE, tick=TICK, filters=Filters(with_baggage=True))
+    assert all(p.itinerary.baggage for p in bag)
 
 
-def test_search_range_one_quote_per_date_cheapest():
-    service = FlightService()
-    start, end = dt.date(2026, 9, 1), dt.date(2026, 9, 5)
-    offers = service.search_range("LON", "NYC", start, end, tick=TICK)
-    dates = [q.date for q in offers]
-    assert dates == sorted(dates)
-    assert len(dates) == len(set(dates))
-    for q in offers:
-        same_day = service.search("LON", "NYC", date=q.date, tick=TICK)
-        assert q.price_total == min(x.price_total for x in same_day)
+def test_has_connections_with_layover_info():
+    svc = FlightService()
+    res = svc.search("MOW", "LBD", DATE, tick=TICK)
+    connecting = [p for p in res if not p.itinerary.is_direct]
+    assert connecting
+    infos = connecting[0].itinerary.stop_infos()
+    assert infos and infos[0][1] > 0  # layover minutes
 
 
-def test_round_trip_total_is_sum():
-    service = FlightService()
-    out_d, back_d = dt.date(2026, 9, 5), dt.date(2026, 9, 12)
-    trip = service.round_trip("LON", "NYC", out_d, back_d, tick=TICK)
-    assert trip is not None
-    out, back, total = trip
-    assert out.origin == "LON" and back.origin == "NYC"
-    assert total == out.price_total + back.price_total
+def test_passenger_totals_scale():
+    svc = FlightService()
+    one = svc.search("MOW", "LBD", DATE, pax=Passengers(1), tick=TICK, limit=1)[0]
+    three = svc.search("MOW", "LBD", DATE, pax=Passengers(3), tick=TICK, limit=1)[0]
+    assert three.price_total > one.price_total
 
 
-def test_cheapest_deals_have_positive_discount():
-    service = FlightService()
-    deals = service.cheapest_deals(tick=TICK, limit=5)
+def test_cheapest_price_and_range():
+    svc = FlightService()
+    assert isinstance(svc.cheapest_price("MOW", "LBD", DATE, tick=TICK), int)
+    points = svc.search_range("MOW", "LBD", DATE, DATE + dt.timedelta(days=4), tick=TICK)
+    assert len(points) == 5
+    assert [d for d, _ in points] == sorted(d for d, _ in points)
+
+
+def test_cheapest_deals_positive_discount():
+    deals = FlightService().cheapest_deals(tick=TICK)
     assert deals
-    assert all(q.discount_pct > 0 for q in deals)
-    pcts = [q.discount_pct for q in deals]
-    assert pcts == sorted(pcts, reverse=True)
+    assert all(p.discount_pct > 0 for p in deals)
 
 
-def test_routes_from_returns_sorted_destinations():
-    service = FlightService()
-    routes = service.routes_from("LON")
-    assert routes == sorted(routes)
-    assert "PAR" in routes and "NYC" in routes
+def test_fmt_duration():
+    assert fmt_duration(65) == "1ч 5м"
+    assert fmt_duration(1440 + 90) == "1д 1ч 30м"

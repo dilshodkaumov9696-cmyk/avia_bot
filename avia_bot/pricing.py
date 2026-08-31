@@ -1,13 +1,9 @@
-"""Dynamic pricing engine.
+"""Dynamic pricing: market fluctuation over time, cabin class, passenger mix.
 
-Real flight prices move over time; to mirror that (and make price tracking,
-history charts and "hot deals" meaningful) each quote is derived from a flight's
-base fare multiplied by a deterministic, smoothly oscillating *market factor*
-that depends on the route and a monotonic ``tick``.
-
-``tick`` is a coarse clock: in the live bot it advances once per tracking
-interval (see :func:`current_tick`), so every poll produces a slightly different
-price. Tests pass an explicit ``tick`` to get deterministic results.
+Prices are quoted in TJS (to match AviaGram). A flight's base fare is multiplied
+by a deterministic, smoothly oscillating *market factor* (per route and ``tick``)
+plus a seasonal factor and a cabin-class factor. Passenger totals combine adults,
+children (75%) and infants (10%).
 """
 
 from __future__ import annotations
@@ -17,14 +13,21 @@ import math
 import time
 from dataclasses import dataclass
 
-# Default price-tracking cadence. AviaGram checks every 30 minutes; the live bot
-# uses the same default but can be overridden (e.g. for demos) via env var.
 DEFAULT_INTERVAL_SECONDS = 30 * 60
+CURRENCY = "TJS"
+
+# cabin key -> (display name, price factor)
+CABINS = {
+    "economy": ("Эконом", 1.0),
+    "business": ("Бизнес", 2.8),
+}
+CABIN_ORDER = ["economy", "business"]
+
+CHILD_FACTOR = 0.75
+INFANT_FACTOR = 0.10
 
 
 def current_tick(interval_seconds: int = DEFAULT_INTERVAL_SECONDS, now: float | None = None) -> int:
-    """Return the market tick for the current (or given) wall-clock time."""
-
     now = time.time() if now is None else now
     return int(now // max(1, interval_seconds))
 
@@ -34,7 +37,7 @@ def _route_seed(route_key: str) -> int:
 
 
 def market_factor(route_key: str, tick: int) -> float:
-    """Deterministic multiplier in roughly ``[0.75, 1.25]`` for a route at a tick."""
+    """Deterministic multiplier ~[0.75, 1.25] for a route at a tick."""
 
     seed = _route_seed(route_key)
     wave = 0.18 * math.sin(0.6 * tick + seed) + 0.06 * math.sin(0.23 * tick + seed * 1.7)
@@ -42,8 +45,6 @@ def market_factor(route_key: str, tick: int) -> float:
 
 
 def seasonal_factor(date: _dt.date) -> float:
-    """Weekends are a little pricier."""
-
     return 1.12 if date.weekday() >= 5 else 1.0
 
 
@@ -51,56 +52,57 @@ def route_key(origin: str, destination: str) -> str:
     return f"{origin}-{destination}"
 
 
-@dataclass(frozen=True)
-class Quote:
-    """A priced offer for a specific flight, passenger count and market tick."""
+def cabin_name(cabin: str) -> str:
+    return CABINS.get(cabin, CABINS["economy"])[0]
 
-    origin: str
-    destination: str
-    date: _dt.date
-    airline: str
-    flight_no: str
-    depart: str
-    arrive: str
-    duration_str: str
-    seats_left: int
-    passengers: int
-    tick: int
-    price_per: int
-    price_total: int
-    baseline_total: int
+
+def cabin_factor(cabin: str) -> float:
+    return CABINS.get(cabin, CABINS["economy"])[1]
+
+
+@dataclass(frozen=True)
+class Passengers:
+    adults: int = 1
+    children: int = 0
+    infants: int = 0
+    cabin: str = "economy"
 
     @property
-    def discount_pct(self) -> int:
-        """Positive when the current price is below the list (baseline) price."""
+    def total(self) -> int:
+        return self.adults + self.children + self.infants
 
-        if self.baseline_total <= 0:
-            return 0
-        return round((self.baseline_total - self.price_total) / self.baseline_total * 100)
+    @property
+    def summary(self) -> str:
+        parts = [f"{self.adults} взр."]
+        if self.children:
+            parts.append(f"{self.children} дет.")
+        if self.infants:
+            parts.append(f"{self.infants} млад.")
+        return ", ".join(parts) + f", {cabin_name(self.cabin)}"
 
 
-def quote(flight, tick: int, passengers: int = 1) -> Quote:
-    """Build a :class:`Quote` for a flight at a given market tick."""
+def per_adult_price(base: int, key: str, date: _dt.date, tick: int, cabin: str) -> int:
+    price = base * market_factor(key, tick) * seasonal_factor(date) * cabin_factor(cabin)
+    return int(round(price))
 
-    passengers = max(1, int(passengers))
-    key = route_key(flight.origin, flight.destination)
-    season = seasonal_factor(flight.date)
-    per = flight.price_usd * market_factor(key, tick) * season
-    per_int = int(round(per))
-    baseline_per = int(round(flight.price_usd * season))
-    return Quote(
-        origin=flight.origin,
-        destination=flight.destination,
-        date=flight.date,
-        airline=flight.airline,
-        flight_no=flight.flight_no,
-        depart=flight.depart,
-        arrive=flight.arrive,
-        duration_str=flight.duration_str,
-        seats_left=flight.seats_left,
-        passengers=passengers,
-        tick=tick,
-        price_per=per_int,
-        price_total=per_int * passengers,
-        baseline_total=baseline_per * passengers,
-    )
+
+def total_price(base: int, key: str, date: _dt.date, tick: int, pax: Passengers) -> int:
+    per = per_adult_price(base, key, date, tick, pax.cabin)
+    total = per * pax.adults + per * CHILD_FACTOR * pax.children + per * INFANT_FACTOR * pax.infants
+    return int(round(total))
+
+
+def format_money(amount: int, currency: str = CURRENCY) -> str:
+    return f"{amount:,}".replace(",", "\u00a0") + f" {currency}"
+
+
+def price_trend(key: str, tick: int) -> str:
+    """A light 'advice' hint: is the fare likely to rise or fall next tick?"""
+
+    now = market_factor(key, tick)
+    nxt = market_factor(key, tick + 1)
+    if nxt < now - 0.01:
+        return "падает"
+    if nxt > now + 0.01:
+        return "растёт"
+    return "стабильна"

@@ -1,33 +1,47 @@
-"""Telegram wiring for AviaBot.
+"""Telegram bot: AviaGram-style guided flight search.
 
-Thin layer over the pure builders in :mod:`avia_bot.responses`: commands and
-inline-button callbacks map to the same functions the offline demo and tests
-use. Price tracking runs on the JobQueue, re-pricing every ``AVIA_TRACK_INTERVAL_SECONDS``
-(default 30 minutes, like AviaGram) and notifying chats when a fare drops.
+Flow (a ConversationHandler): city *from* → pick airport → city *to* → pick
+airport → passengers & cabin (−/+ buttons) → calendar (outbound + optional
+return) → animated multi-provider search → paginated result cards with filters,
+price advice, flexible dates, buy links and one-tap price tracking.
 
-Running the live bot needs ``TELEGRAM_BOT_TOKEN`` and outbound access to the
-Telegram API; everything else works offline.
+Runs live with ``TELEGRAM_BOT_TOKEN``; all logic is covered offline by the demo
+and tests. Replies are rendered to emoji-safe HTML.
 """
 
 from __future__ import annotations
 
+import asyncio
+import datetime as _dt
 import io
 import logging
 import os
+import re
+from typing import List, Optional
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputFile,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    ConversationHandler,
     MessageHandler,
     filters,
 )
 
-from . import charts, pricing, responses
-from .flights import FlightService, parse_date, resolve_city
+from . import calendar_ui, charts, geo, pricing, responses
+from .flights import Filters, FlightService
+from .pricing import Passengers
+from .search_flow import adjust_pax, cycle_cabin, paginate
 from .tracking import PriceTracker
 
 logger = logging.getLogger("avia_bot")
@@ -37,230 +51,412 @@ TRACK_INTERVAL_SECONDS = int(os.environ.get("AVIA_TRACK_INTERVAL_SECONDS", str(p
 _service = FlightService()
 _tracker = PriceTracker(_service)
 
+# Conversation states
+FROM, TO, PAX, DATES = range(4)
+
+# Reply-keyboard button labels
+BTN_SEARCH = "🔎 Поиск"
+BTN_RANGE = "🔎🗓 По диапазону"
+BTN_TRACK = "➕👀 Добавить отслеживание"
+
 
 def _now_tick() -> int:
     return pricing.current_tick(TRACK_INTERVAL_SECONDS)
 
 
-def _menu_markup() -> InlineKeyboardMarkup:
+# --- keyboards -------------------------------------------------------------
+
+
+def _main_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(BTN_SEARCH)], [KeyboardButton(BTN_RANGE), KeyboardButton(BTN_TRACK)]],
+        resize_keyboard=True,
+    )
+
+
+def _city_kb(options, prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("\U0001f50e \u041f\u043e\u0438\u0441\u043a", callback_data="m:search"),
-             InlineKeyboardButton("\U0001f4c5 \u0414\u0438\u0430\u043f\u0430\u0437\u043e\u043d", callback_data="m:range")],
-            [InlineKeyboardButton("\U0001f525 \u0413\u043e\u0440\u044f\u0449\u0438\u0435", callback_data="m:hot"),
-             InlineKeyboardButton("\U0001f440 \u041c\u043e\u0438 \u043e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u043d\u0438\u044f", callback_data="m:mytracks")],
-            [InlineKeyboardButton("\U0001f3d9 \u0413\u043e\u0440\u043e\u0434\u0430", callback_data="m:cities"),
-             InlineKeyboardButton("\u2139\ufe0f \u041f\u043e\u043c\u043e\u0449\u044c", callback_data="m:help")],
-        ]
+        [[InlineKeyboardButton(a.option_text, callback_data=f"{prefix}:{a.code}")] for a in options]
     )
 
 
-def _buy_button(origin, destination, out_date, back_date=None, passengers=1, label="\U0001f517 \u041a\u0443\u043f\u0438\u0442\u044c") -> InlineKeyboardButton:
-    url = responses.aviasales_url(origin, destination, out_date, back_date=back_date, passengers=passengers)
-    return InlineKeyboardButton(label, url=url)
+def _pax_kb(pax: Passengers) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("−", callback_data="px:a:-"),
+         InlineKeyboardButton(f"Взрослые: {pax.adults}", callback_data="px:x"),
+         InlineKeyboardButton("+", callback_data="px:a:+")],
+        [InlineKeyboardButton("−", callback_data="px:c:-"),
+         InlineKeyboardButton(f"Дети: {pax.children}", callback_data="px:x"),
+         InlineKeyboardButton("+", callback_data="px:c:+")],
+        [InlineKeyboardButton("−", callback_data="px:i:-"),
+         InlineKeyboardButton(f"Младенцы: {pax.infants}", callback_data="px:x"),
+         InlineKeyboardButton("+", callback_data="px:i:+")],
+        [InlineKeyboardButton("◀️", callback_data="px:cab:-"),
+         InlineKeyboardButton(f"💺 {pricing.cabin_name(pax.cabin)}", callback_data="px:x"),
+         InlineKeyboardButton("▶️", callback_data="px:cab:+")],
+        [InlineKeyboardButton("✅ Далее", callback_data="px:go")],
+    ])
 
 
-def _offer_markup(quote) -> InlineKeyboardMarkup:
-    track = InlineKeyboardButton(
-        "\U0001f440 \u041e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u0442\u044c \u0446\u0435\u043d\u0443",
-        callback_data=f"trk|{quote.origin}|{quote.destination}|{quote.date.isoformat()}|{quote.passengers}",
-    )
-    buy = _buy_button(quote.origin, quote.destination, quote.date, passengers=quote.passengers)
-    return InlineKeyboardMarkup([[buy, track]])
-
-
-def _range_chart_button(quotes) -> InlineKeyboardMarkup:
-    first, last = quotes[0], quotes[-1]
-    data = f"rc|{first.origin}|{first.destination}|{first.date.isoformat()}|{last.date.isoformat()}|{first.passengers}"
+def _calendar_kb(year: int, month: int, selected) -> InlineKeyboardMarkup:
+    rows = calendar_ui.build_calendar(year, month, selected)
     return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("\U0001f4ca \u0413\u0440\u0430\u0444\u0438\u043a \u0446\u0435\u043d", callback_data=data)]]
+        [[InlineKeyboardButton(text, callback_data=data) for text, data in row] for row in rows]
     )
 
 
-# --- text/photo helpers ----------------------------------------------------
+def _results_kb(search: dict) -> InlineKeyboardMarkup:
+    results = search["results"]
+    page = search["page"]
+    offer = results[page]
+    pax = search["pax"]
+    buy_url = responses.aviasales_url(
+        search["o_code"], search["d_code"], search["dep"], back_date=search.get("ret"),
+        passengers=max(1, pax.adults + pax.children),
+    )
+    total = len(results)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(responses.offer_buy_label(offer), url=buy_url)],
+        [InlineKeyboardButton("«", callback_data="res:prev"),
+         InlineKeyboardButton(f"{page + 1} / {total}", callback_data="res:x"),
+         InlineKeyboardButton("»", callback_data="res:next")],
+        [InlineKeyboardButton("🗓 ±3 дня", callback_data="res:flex"),
+         InlineKeyboardButton("🔄 Обновить", callback_data="res:refresh"),
+         InlineKeyboardButton("⚙️ Фильтры", callback_data="res:filters")],
+        [InlineKeyboardButton("➕👀 Отслеживать цену", callback_data="res:track")],
+    ])
 
 
-async def _reply(update: Update, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
+def _filters_kb(f: Filters) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"{'✅' if f.direct_only else '⬜'} Только прямые", callback_data="flt:direct")],
+        [InlineKeyboardButton(f"{'✅' if f.with_baggage else '⬜'} С багажом", callback_data="flt:bag")],
+        [InlineKeyboardButton("Применить", callback_data="flt:apply"),
+         InlineKeyboardButton("Сбросить", callback_data="flt:reset")],
+    ])
+
+
+# --- send helpers ----------------------------------------------------------
+
+
+async def _reply(update: Update, text: str, markup=None) -> None:
     if update.message is not None:
-        await update.message.reply_text(
-            responses.render_html(text), parse_mode=ParseMode.HTML, reply_markup=markup
-        )
+        await update.message.reply_text(responses.render_html(text), parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
-async def _cb_reply(query, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
-    await query.message.reply_text(
-        responses.render_html(text), parse_mode=ParseMode.HTML, reply_markup=markup
-    )
+async def _edit(query, text: str, markup=None) -> None:
+    await query.edit_message_text(responses.render_html(text), parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
-async def _send_photo(bot, chat_id: int, png: bytes, caption: str | None = None) -> None:
-    await bot.send_photo(
-        chat_id=chat_id,
-        photo=InputFile(io.BytesIO(png), filename="chart.png"),
-        caption=responses.render_html(caption) if caption else None,
-        parse_mode=ParseMode.HTML,
-    )
+async def _send_photo(bot, chat_id: int, png: bytes, caption: Optional[str] = None) -> None:
+    await bot.send_photo(chat_id=chat_id, photo=InputFile(io.BytesIO(png), filename="chart.png"),
+                         caption=responses.render_html(caption) if caption else None, parse_mode=ParseMode.HTML)
 
 
-# --- command handlers ------------------------------------------------------
+# --- simple commands -------------------------------------------------------
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, responses.WELCOME, _menu_markup())
+    await _reply(update, responses.WELCOME, _main_kb())
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, responses.HELP)
-
-
-async def cities(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, responses.cities_text())
-
-
-async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    args = context.args or []
-    text = responses.search_response(_service, args, tick=_now_tick())
-    parsed = responses.parse_args(args)
-    markup = None
-    if len(parsed.cities) >= 2 and parsed.dates:
-        origin = resolve_city(responses._split_cities(parsed.cities)[0])
-        destination = resolve_city(responses._split_cities(parsed.cities)[1])
-        if origin and destination and origin != destination:
-            best = _service.cheapest(origin, destination, parsed.dates[0], passengers=parsed.passengers, tick=_now_tick())
-            if best is not None:
-                markup = _offer_markup(best)
-    await _reply(update, text, markup)
-
-
-async def range_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    text, offers = responses.range_response(_service, context.args or [], tick=_now_tick())
-    await _reply(update, text, _range_chart_button(offers) if offers else None)
-
-
-async def roundtrip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    args = context.args or []
-    text = responses.roundtrip_response(_service, args, tick=_now_tick())
-    parsed = responses.parse_args(args)
-    markup = None
-    if len(parsed.cities) >= 2 and len(parsed.dates) >= 2:
-        origin, destination, unknown = responses._resolve_pair(parsed.cities)
-        if origin and destination and not unknown and origin != destination:
-            out_date, back_date = sorted(parsed.dates[:2])
-            buy = _buy_button(
-                origin, destination, out_date, back_date=back_date, passengers=parsed.passengers,
-                label="\U0001f517 \u041a\u0443\u043f\u0438\u0442\u044c (\u0442\u0443\u0434\u0430-\u043e\u0431\u0440\u0430\u0442\u043d\u043e)",
-            )
-            markup = InlineKeyboardMarkup([[buy]])
-    await _reply(update, text, markup)
+    await _reply(update, responses.HELP, _main_kb())
 
 
 async def hot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, responses.hot_response(_service, context.args or [], tick=_now_tick()))
-
-
-async def track(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_chat is None:
-        return
-    parsed = responses.parse_args(context.args or [])
-    if len(parsed.cities) < 2 or not parsed.dates:
-        await _reply(update, "\u0424\u043e\u0440\u043c\u0430\u0442: `/track \u043e\u0442\u043a\u0443\u0434\u0430 \u043a\u0443\u0434\u0430 \u0414\u0410\u0422\u0410 [\u043f\u0430\u0441\u0441.]`\n\u041d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: `/track LON NYC 2026-09-05`.")
-        return
-    origin, destination, unknown = responses._resolve_pair(parsed.cities)
-    if unknown:
-        await _reply(update, responses._unknown_msg(unknown))
-        return
-    if origin == destination:
-        await _reply(update, "\u0413\u043e\u0440\u043e\u0434 \u0432\u044b\u043b\u0435\u0442\u0430 \u0438 \u043f\u0440\u0438\u043b\u0451\u0442\u0430 \u0434\u043e\u043b\u0436\u043d\u044b \u043e\u0442\u043b\u0438\u0447\u0430\u0442\u044c\u0441\u044f.")
-        return
-    _, quote = _tracker.add(
-        update.effective_chat.id, origin, destination, parsed.dates[0], parsed.passengers, tick=_now_tick()
-    )
-    if quote is None:
-        await _reply(update, f"\u041d\u0435\u0442 \u0440\u0435\u0439\u0441\u043e\u0432 {origin} \u2192 {destination} \u043d\u0430 \u044d\u0442\u0443 \u0434\u0430\u0442\u0443.")
-        return
-    await _reply(update, responses.track_added_text(quote))
+    deals = _service.cheapest_deals(tick=_now_tick())
+    await _reply(update, responses.hot_text(deals))
 
 
 async def mytracks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_chat is None:
         return
     tracks = _tracker.list_for(update.effective_chat.id)
-    markup = None
-    if tracks:
-        rows = [
-            [InlineKeyboardButton(f"\u274c {t.origin}\u2192{t.destination} {t.date.isoformat()}", callback_data=f"unt|{t.key}")]
-            for t in tracks
-        ]
-        markup = InlineKeyboardMarkup(rows)
-    await _reply(update, responses.mytracks_text(tracks), markup)
+    await _reply(update, responses.mytracks_text(tracks))
 
 
-async def fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, responses.HELP, _menu_markup())
+# --- guided search conversation -------------------------------------------
 
 
-# --- callback handling -----------------------------------------------------
+async def search_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["draft"] = {"pax": Passengers()}
+    await _reply(update, responses.ASK_FROM, _main_kb())
+    return FROM
 
 
-async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _handle_city_text(update, context, prefix):
+    options = geo.search_cities(update.message.text)
+    if not options:
+        await _reply(update, responses.CITY_NOT_FOUND)
+        return None
+    prompt = responses.CHOOSE_FROM if prefix == "cf" else responses.CHOOSE_TO
+    await _reply(update, prompt, _city_kb(options, prefix))
+    return options
+
+
+async def from_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _handle_city_text(update, context, "cf")
+    return FROM
+
+
+async def from_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if query is None or query.data is None:
-        return
     await query.answer()
-    data = query.data
-    chat_id = query.message.chat_id if query.message else None
+    code = query.data.split(":")[1]
+    context.user_data["draft"]["o"] = geo.airport(code)
+    await _edit(query, f"{responses.route_line_from(context.user_data['draft']['o'])}\n\n{responses.ASK_TO}")
+    return TO
 
-    if data == "m:help":
-        await _cb_reply(query, responses.HELP)
-    elif data == "m:cities":
-        await _cb_reply(query, responses.cities_text())
-    elif data == "m:hot":
-        await _cb_reply(query, responses.hot_response(_service, [], tick=_now_tick()))
-    elif data == "m:search":
-        await _cb_reply(query, "\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435: `/search London Dubai 2026-09-05`")
-    elif data == "m:range":
-        await _cb_reply(query, "\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435: `/range LON NYC 2026-09-01 2026-09-10`")
-    elif data == "m:mytracks":
-        tracks = _tracker.list_for(chat_id) if chat_id is not None else []
-        await _cb_reply(query, responses.mytracks_text(tracks))
-    elif data.startswith("trk|") and chat_id is not None:
-        _, o, d, date_s, pax = data.split("|")
-        date = parse_date(date_s)
-        _, quote = _tracker.add(chat_id, o, d, date, int(pax), tick=_now_tick())
-        if quote is not None:
-            await _cb_reply(query, responses.track_added_text(quote))
-    elif data.startswith("rc|"):
-        _, o, d, start_s, end_s, pax = data.split("|")
-        offers = _service.search_range(o, d, parse_date(start_s), parse_date(end_s), passengers=int(pax), tick=_now_tick())
-        if offers and chat_id is not None:
-            await _send_photo(context.bot, chat_id, charts.render_range_chart(offers), caption=f"\U0001f4ca {o} \u2192 {d}")
-    elif data.startswith("unt|") and chat_id is not None:
-        key = data[len("unt|"):]
-        removed = _tracker.remove(chat_id, key)
-        await _cb_reply(
-            query,
-            "\u0423\u0434\u0430\u043b\u0438\u043b \u043e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u043d\u0438\u0435." if removed else "\u041e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u043d\u0438\u0435 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e.",
-        )
+
+async def to_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _handle_city_text(update, context, "ct")
+    return TO
+
+
+async def to_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split(":")[1]
+    draft = context.user_data["draft"]
+    draft["d"] = geo.airport(code)
+    text = responses.route_line(draft["o"], draft["d"]) + "\n\n" + responses.PAX_PROMPT
+    await _edit(query, text, _pax_kb(draft["pax"]))
+    return PAX
+
+
+async def pax_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    draft = context.user_data["draft"]
+    pax: Passengers = draft["pax"]
+    data = query.data
+
+    if data == "px:x":
+        return PAX
+    if data == "px:go":
+        today = _dt.date.today()
+        draft.update({"y": today.year, "m": today.month, "dep": None, "ret": None})
+        await _edit(query, responses.dates_prompt(None, None), _calendar_kb(today.year, today.month, []))
+        return DATES
+
+    field = {"a": "adults", "c": "children", "i": "infants"}.get(data.split(":")[1])
+    if field:
+        pax = adjust_pax(pax, field, 1 if data.endswith("+") else -1)
+    elif data.startswith("px:cab"):
+        pax = cycle_cabin(pax, 1 if data.endswith("+") else -1)
+    draft["pax"] = pax
+    await query.edit_message_reply_markup(_pax_kb(pax))
+    return PAX
+
+
+async def dates_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    draft = context.user_data["draft"]
+    data = query.data
+
+    if data == "cal:x":
+        return DATES
+    if data.startswith("cal:nav:"):
+        y, m = map(int, data.split(":")[2].split("-"))
+        draft["y"], draft["m"] = y, m
+        selected = [d for d in (draft.get("dep"), draft.get("ret")) if d]
+        await query.edit_message_reply_markup(_calendar_kb(y, m, selected))
+        return DATES
+    if data.startswith("cal:day:"):
+        day = _dt.date.fromisoformat(data.split(":", 2)[2])
+        if not draft.get("dep") or (draft.get("dep") and draft.get("ret")):
+            draft["dep"], draft["ret"] = day, None      # (re)start selection
+        elif day < draft["dep"]:
+            draft["dep"] = day
+        else:
+            draft["ret"] = day
+        selected = [d for d in (draft.get("dep"), draft.get("ret")) if d]
+        await _edit(query, responses.dates_prompt(draft.get("dep"), draft.get("ret")),
+                    _calendar_kb(draft["y"], draft["m"], selected))
+        return DATES
+    if data == "cal:done":
+        if not draft.get("dep"):
+            await query.answer("Выберите дату вылета", show_alert=True)
+            return DATES
+        return await _run_search(update, context)
+    return DATES
+
+
+async def _run_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    draft = context.user_data["draft"]
+    # Animated multi-provider search.
+    for step in range(1, 4):
+        await _edit(query, responses.searching_bar(step))
+        await asyncio.sleep(0.4)
+
+    pax: Passengers = draft["pax"]
+    results = _service.search(draft["o"].code, draft["d"].code, draft["dep"], pax=pax, tick=_now_tick())
+    context.user_data["search"] = {
+        "o_code": draft["o"].code, "o_city": draft["o"].city,
+        "d_code": draft["d"].code, "d_city": draft["d"].city,
+        "dep": draft["dep"], "ret": draft.get("ret"), "pax": pax,
+        "filters": Filters(), "results": results, "page": 0,
+    }
+    await _show_results(query, context, edit=True)
+    return ConversationHandler.END
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _reply(update, "Отменил. Нажмите 🔎 Поиск, чтобы начать заново.", _main_kb())
+    return ConversationHandler.END
+
+
+# --- results (post-conversation) ------------------------------------------
+
+
+def _results_text(search: dict) -> str:
+    results = search["results"]
+    if not results:
+        return responses.no_results_text(search["filters"].active)
+    page = search["page"]
+    offer = results[page]
+    header = responses.results_header(search["o_city"], search["d_city"], search["dep"],
+                                      search["pax"], page, len(results), search["filters"])
+    body = responses.format_offer(offer)
+    advice = responses.price_advice_text(
+        search["o_code"], search["d_code"],
+        pricing.price_trend(pricing.route_key(offer.itinerary.origin, offer.itinerary.destination), offer.tick),
+    )
+    text = header + "\n\n" + body
+    if advice:
+        text += "\n\n" + advice
+    return text
+
+
+async def _show_results(query, context, edit: bool):
+    search = context.user_data["search"]
+    markup = _results_kb(search) if search["results"] else None
+    text = _results_text(search)
+    if edit:
+        await _edit(query, text, markup)
+    else:
+        await query.message.reply_text(responses.render_html(text), parse_mode=ParseMode.HTML, reply_markup=markup)
+
+
+async def results_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    search = context.user_data.get("search")
+    if not search:
+        await query.answer("Начните новый поиск 🔎", show_alert=True)
+        return
+    data = query.data
+
+    if data == "res:x":
+        return
+    if data in ("res:next", "res:prev"):
+        _, search["page"], _ = paginate(search["results"], search["page"] + (1 if data == "res:next" else -1))
+        await _show_results(query, context, edit=True)
+    elif data == "res:refresh":
+        search["results"] = _service.search(search["o_code"], search["d_code"], search["dep"],
+                                             pax=search["pax"], tick=_now_tick(), filters=search["filters"])
+        _, search["page"], _ = paginate(search["results"], search["page"])
+        await _show_results(query, context, edit=True)
+    elif data == "res:filters":
+        await _edit(query, "⚙️ Фильтры поиска:", _filters_kb(search["filters"]))
+    elif data == "res:flex":
+        await _send_flex(query, context)
+    elif data == "res:track":
+        await _add_track_from_search(query.message.chat_id, context)
+        await query.message.reply_text(
+            responses.render_html("Готово! " + responses.mytracks_hint()), parse_mode=ParseMode.HTML)
+
+
+async def filters_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    search = context.user_data.get("search")
+    if not search:
+        return
+    f: Filters = search["filters"]
+    data = query.data
+    if data == "flt:direct":
+        f.direct_only = not f.direct_only
+        await query.edit_message_reply_markup(_filters_kb(f))
+    elif data == "flt:bag":
+        f.with_baggage = not f.with_baggage
+        await query.edit_message_reply_markup(_filters_kb(f))
+    elif data in ("flt:apply", "flt:reset"):
+        if data == "flt:reset":
+            search["filters"] = Filters()
+        search["results"] = _service.search(search["o_code"], search["d_code"], search["dep"],
+                                             pax=search["pax"], tick=_now_tick(), filters=search["filters"])
+        search["page"] = 0
+        await _show_results(query, context, edit=True)
+
+
+async def _send_flex(query, context):
+    search = context.user_data["search"]
+    points = _service.flexible_dates(search["o_code"], search["d_code"], search["dep"],
+                                     pax=search["pax"], tick=_now_tick())
+    text = responses.flexible_text(points, search["dep"]) or "Рядом дешевле не нашлось."
+    await query.message.reply_text(responses.render_html(text), parse_mode=ParseMode.HTML)
+    if points:
+        png = charts.render_range_chart(search["o_city"], search["d_city"], points)
+        await _send_photo(context.bot, query.message.chat_id, png)
+
+
+async def _add_track_from_search(chat_id: int, context) -> Optional[int]:
+    search = context.user_data.get("search")
+    if not search:
+        return None
+    _, price = _tracker.add(chat_id, search["o_code"], search["d_code"], search["dep"],
+                            pax=search["pax"], tick=_now_tick())
+    return price
+
+
+# --- reply-keyboard shortcuts ---------------------------------------------
+
+
+async def range_shortcut(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    search = context.user_data.get("search")
+    if not search:
+        await _reply(update, "Сначала выполните поиск 🔎, потом смотрите цены по диапазону.")
+        return
+    start = search["dep"] - _dt.timedelta(days=3)
+    end = search["dep"] + _dt.timedelta(days=7)
+    points = _service.search_range(search["o_code"], search["d_code"], start, end,
+                                   pax=search["pax"], tick=_now_tick())
+    await _reply(update, responses.range_text(search["o_city"], search["d_city"], points, search["pax"]))
+    if points and update.effective_chat is not None:
+        png = charts.render_range_chart(search["o_city"], search["d_city"], points)
+        await _send_photo(context.bot, update.effective_chat.id, png)
+
+
+async def track_shortcut(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat is None:
+        return
+    price = await _add_track_from_search(update.effective_chat.id, context)
+    if price is None:
+        await _reply(update, "Сначала выполните поиск 🔎 — потом добавлю отслеживание маршрута.")
+        return
+    s = context.user_data["search"]
+    await _reply(update, responses.track_added_text(s["o_city"], s["d_city"], s["dep"], s["pax"], price))
 
 
 # --- price-tracking job ----------------------------------------------------
 
 
 async def _poll_prices(context: ContextTypes.DEFAULT_TYPE) -> None:
-    drops = _tracker.poll(_now_tick())
-    for event in drops:
-        text = responses.drop_text(
-            event.track.origin, event.track.destination, event.track.date,
-            event.previous_price, event.new_price, event.drop_pct,
-        )
+    for event in _tracker.poll(_now_tick()):
+        t = event.track
+        o_city = geo.city_of(t.origin) or t.origin
+        d_city = geo.city_of(t.destination) or t.destination
+        text = responses.drop_text(o_city, d_city, t.date, event.previous_price, event.new_price, event.drop_pct)
         try:
-            await context.bot.send_message(
-                event.track.chat_id, responses.render_html(text), parse_mode=ParseMode.HTML
-            )
-            if len(event.track.history) >= 2:
-                await _send_photo(context.bot, event.track.chat_id, charts.render_history_chart(event.track))
-        except Exception:  # noqa: BLE001 - never let one bad chat kill the job
-            logger.exception("Failed to notify chat %s", event.track.chat_id)
+            await context.bot.send_message(t.chat_id, responses.render_html(text), parse_mode=ParseMode.HTML)
+            if len(t.history) >= 2:
+                await _send_photo(context.bot, t.chat_id, charts.render_history_chart(t))
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to notify chat %s", t.chat_id)
 
 
 async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -277,35 +473,49 @@ async def _post_init(application: Application) -> None:
 
 def build_application(token: str) -> Application:
     application = Application.builder().token(token).post_init(_post_init).build()
+
+    conv = ConversationHandler(
+        entry_points=[
+            CommandHandler("search", search_start),
+            MessageHandler(filters.Regex(f"^{re.escape(BTN_SEARCH)}$"), search_start),
+        ],
+        states={
+            FROM: [
+                CallbackQueryHandler(from_pick, pattern="^cf:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, from_text),
+            ],
+            TO: [
+                CallbackQueryHandler(to_pick, pattern="^ct:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, to_text),
+            ],
+            PAX: [CallbackQueryHandler(pax_cb, pattern="^px:")],
+            DATES: [CallbackQueryHandler(dates_cb, pattern="^cal:")],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        allow_reentry=True,
+    )
+
+    application.add_handler(conv)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("cities", cities))
-    application.add_handler(CommandHandler("search", search))
-    application.add_handler(CommandHandler("range", range_search))
-    application.add_handler(CommandHandler("rt", roundtrip))
     application.add_handler(CommandHandler("hot", hot))
-    application.add_handler(CommandHandler("track", track))
     application.add_handler(CommandHandler("mytracks", mytracks))
-    application.add_handler(CallbackQueryHandler(on_callback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_RANGE)}$"), range_shortcut))
+    application.add_handler(MessageHandler(filters.Regex(f"^{re.escape(BTN_TRACK)}$"), track_shortcut))
+    application.add_handler(CallbackQueryHandler(results_cb, pattern="^res:"))
+    application.add_handler(CallbackQueryHandler(filters_cb, pattern="^flt:"))
     application.add_error_handler(_on_error)
     return application
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
-    # httpx logs each request URL at INFO, and Telegram embeds the bot token in
-    # the URL path, so keep it at WARNING to avoid leaking the token into logs.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # keep bot token out of logs
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         raise SystemExit(
-            "TELEGRAM_BOT_TOKEN is not set. Export it (see .env.example) to run the "
-            "live bot. The flight search core still works offline via `python -m "
-            "avia_bot.demo`."
+            "TELEGRAM_BOT_TOKEN is not set. Export it (see .env.example) to run the live bot. "
+            "The engine still works offline via `python -m avia_bot.demo`."
         )
     logger.info("Starting avia_bot in polling mode")
     build_application(token).run_polling()

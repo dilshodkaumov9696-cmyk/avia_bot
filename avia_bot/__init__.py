@@ -1,12 +1,17 @@
-"""avia_bot — a simple flight-search Telegram bot.
+"""avia_bot — an AviaGram-style flight-search & price-tracking Telegram bot.
 
-The package is split so the flight-search core and message formatting are pure,
-synchronous functions that can be exercised without a live Telegram connection:
+The engine is pure and synchronous so it runs without a live Telegram connection:
 
-- ``flights``    — flight data model and the in-memory search service.
-- ``responses``  — pure functions that turn parsed user input into reply text.
-- ``bot``        — the thin Telegram wiring built on top of ``responses``.
-- ``demo``       — an offline CLI that drives ``responses`` like a real chat.
+- ``geo``         — cities & airports + fuzzy city search.
+- ``flights``     — itinerary engine (direct/connecting, baggage, seats, filters).
+- ``pricing``     — market/season/cabin pricing, passenger mix, TJS, trend.
+- ``calendar_ui`` — inline calendar model.
+- ``search_flow`` — passenger/cabin math + pagination.
+- ``tracking``    — price-tracking store + drop detection.
+- ``charts``      — matplotlib price charts.
+- ``responses``   — RU prompts + result cards (rendered to HTML).
+- ``bot``         — the Telegram wiring (guided ConversationHandler).
+- ``demo``        — an offline walkthrough of the whole scenario.
 """
 
 __all__ = ["__version__"]

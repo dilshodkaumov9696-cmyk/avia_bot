@@ -1,55 +1,42 @@
 import datetime as dt
 
 from avia_bot.flights import FlightService
+from avia_bot.pricing import Passengers
 from avia_bot.tracking import PriceTracker
 
-DATE = dt.date(2026, 9, 5)
+DATE = dt.date(2026, 9, 17)
 
 
-def _find_drop_ticks(service):
-    prices = {t: service.cheapest("LON", "PAR", DATE, tick=t).price_total for t in range(0, 60)}
+def _drop_ticks(svc):
+    prices = {t: svc.cheapest_price("MOW", "LBD", DATE, tick=t) for t in range(0, 60)}
     for t in range(0, 59):
         if prices[t + 1] < prices[t]:
             return t, t + 1
-    raise AssertionError("no price drop found in tick range")
+    raise AssertionError("no drop found")
 
 
 def test_add_seeds_history():
-    service = FlightService()
-    tracker = PriceTracker(service)
-    track, quote = tracker.add(1, "LON", "PAR", DATE, tick=5)
-    assert quote is not None
-    assert track.history[-1] == (5, quote.price_total)
-    assert tracker.list_for(1) == [track]
+    svc = FlightService()
+    tr = PriceTracker(svc)
+    track, price = tr.add(1, "MOW", "LBD", DATE, pax=Passengers(), tick=5)
+    assert price is not None
+    assert track.history[-1] == (5, price)
 
 
-def test_poll_detects_drop_and_records_history():
-    service = FlightService()
-    tracker = PriceTracker(service)
-    high, low = _find_drop_ticks(service)
-
-    tracker.add(1, "LON", "PAR", DATE, tick=high)
-    drops = tracker.poll(low)
-
+def test_poll_detects_drop():
+    svc = FlightService()
+    tr = PriceTracker(svc)
+    high, low = _drop_ticks(svc)
+    tr.add(1, "MOW", "LBD", DATE, tick=high)
+    drops = tr.poll(low)
     assert len(drops) == 1
-    event = drops[0]
-    assert event.new_price < event.previous_price
-    assert event.drop_pct > 0
-    track = tracker.list_for(1)[0]
-    assert [t for t, _ in track.history] == [high, low]
+    assert drops[0].new_price < drops[0].previous_price
+    assert drops[0].drop_pct > 0
 
 
-def test_poll_same_tick_is_noop():
-    service = FlightService()
-    tracker = PriceTracker(service)
-    tracker.add(1, "LON", "PAR", DATE, tick=5)
-    assert tracker.poll(5) == []  # no duplicate point / drop for same tick
-
-
-def test_remove_track():
-    service = FlightService()
-    tracker = PriceTracker(service)
-    track, _ = tracker.add(1, "LON", "PAR", DATE, tick=5)
-    assert tracker.remove(1, track.key) is True
-    assert tracker.list_for(1) == []
-    assert tracker.remove(1, track.key) is False
+def test_remove():
+    svc = FlightService()
+    tr = PriceTracker(svc)
+    track, _ = tr.add(1, "MOW", "LBD", DATE, tick=5)
+    assert tr.remove(1, track.key) is True
+    assert tr.list_for(1) == []

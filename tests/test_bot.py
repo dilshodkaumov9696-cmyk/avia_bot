@@ -1,101 +1,141 @@
-"""Async tests for the Telegram handler layer using mocked Update/Context.
-
-These drive the real handlers in :mod:`avia_bot.bot` (keyboards, the chart
-callback and the price-drop job) without a network or a bot token.
-"""
+"""Async tests for the conversation handlers using mocked Update/Context."""
 
 import asyncio
 import datetime as dt
 from unittest.mock import AsyncMock, MagicMock
 
-from avia_bot import bot
+from avia_bot import bot, geo
+from avia_bot.flights import Filters, FlightService
+from avia_bot.pricing import Passengers
+
+DATE = dt.date(2026, 9, 17)
 
 
-def _make_update(args=None, chat_id=1):
+def _ctx():
+    context = MagicMock()
+    context.user_data = {}
+    context.bot = AsyncMock()
+    return context
+
+
+def _msg_update(text="Москва", chat_id=1):
     update = MagicMock()
     update.message = AsyncMock()
+    update.message.text = text
     update.effective_chat = MagicMock(id=chat_id)
-    context = MagicMock()
-    context.args = args or []
-    context.bot = AsyncMock()
-    return update, context
+    return update
 
 
-def _callback_datas(markup):
-    return [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
-
-
-def _button_urls(markup):
-    return [btn.url for row in markup.inline_keyboard for btn in row if btn.url]
-
-
-def test_search_handler_attaches_track_and_buy_buttons():
-    update, context = _make_update(["London", "Paris", "2026-09-05"])
-    asyncio.run(bot.search(update, context))
-    update.message.reply_text.assert_called_once()
-    markup = update.message.reply_text.call_args.kwargs["reply_markup"]
-    assert markup is not None
-    assert any("trk|LON|PAR|2026-09-05" in cd for cd in _callback_datas(markup))
-    assert any("aviasales.com/search/LON0509PAR" in url for url in _button_urls(markup))
-
-
-def test_search_handler_uses_html_parse_mode():
-    from telegram.constants import ParseMode
-
-    update, context = _make_update(["London", "Paris", "2026-09-05"])
-    asyncio.run(bot.search(update, context))
-    assert update.message.reply_text.call_args.kwargs["parse_mode"] == ParseMode.HTML
-    # rendered text must not contain raw markup asterisks
-    sent = update.message.reply_text.call_args.args[0]
-    assert "<b>" in sent and "*" not in sent
-
-
-def test_range_handler_attaches_chart_button():
-    update, context = _make_update(["LON", "NYC", "2026-09-01", "2026-09-05"])
-    asyncio.run(bot.range_search(update, context))
-    markup = update.message.reply_text.call_args.kwargs["reply_markup"]
-    assert markup is not None
-    assert markup.inline_keyboard[0][0].callback_data.startswith("rc|LON|NYC|")
-
-
-def test_callback_range_chart_sends_photo():
-    update, context = _make_update(chat_id=55)
+def _cb_update(data, chat_id=1):
+    update = MagicMock()
     query = AsyncMock()
-    query.data = "rc|LON|NYC|2026-09-01|2026-09-05|1"
+    query.data = data
     query.message = MagicMock()
-    query.message.chat_id = 55
+    query.message.chat_id = chat_id
+    query.message.reply_text = AsyncMock()
     update.callback_query = query
-    asyncio.run(bot.on_callback(update, context))
-    query.answer.assert_awaited()
-    context.bot.send_photo.assert_awaited_once()
+    update.message = None
+    update.effective_chat = MagicMock(id=chat_id)
+    return update, query
 
 
-def test_track_and_mytracks_handlers():
-    update, context = _make_update(["LON", "PAR", "2026-09-05"], chat_id=777)
-    asyncio.run(bot.track(update, context))
+def test_search_start_asks_from():
+    update, context = _msg_update(), _ctx()
+    state = asyncio.run(bot.search_start(update, context))
+    assert state == bot.FROM
     update.message.reply_text.assert_called()
-    assert bot._tracker.list_for(777)
-
-    update2, context2 = _make_update(chat_id=777)
-    asyncio.run(bot.mytracks(update2, context2))
-    text = update2.message.reply_text.call_args.args[0]
-    assert "LON \u2192 PAR" in text
 
 
-def test_poll_prices_job_sends_drop_notification(monkeypatch):
-    service = bot._service
-    date = dt.date(2026, 9, 5)
-    prices = {t: service.cheapest("LON", "PAR", date, tick=t).price_total for t in range(0, 60)}
+def test_from_text_offers_cities():
+    update, context = _msg_update("Москва"), _ctx()
+    context.user_data["draft"] = {"pax": Passengers()}
+    state = asyncio.run(bot.from_text(update, context))
+    assert state == bot.FROM
+    assert update.message.reply_text.call_args.kwargs["reply_markup"] is not None
+
+
+def test_from_pick_then_to_pick_reach_pax():
+    context = _ctx()
+    context.user_data["draft"] = {"pax": Passengers()}
+
+    u1, q1 = _cb_update("cf:MOW")
+    assert asyncio.run(bot.from_pick(u1, context)) == bot.TO
+    assert context.user_data["draft"]["o"].code == "MOW"
+
+    u2, q2 = _cb_update("ct:LBD")
+    assert asyncio.run(bot.to_pick(u2, context)) == bot.PAX
+    assert context.user_data["draft"]["d"].code == "LBD"
+    q2.edit_message_text.assert_awaited()
+
+
+def test_pax_increment_and_go():
+    context = _ctx()
+    context.user_data["draft"] = {"o": geo.airport("MOW"), "d": geo.airport("LBD"), "pax": Passengers()}
+
+    u, q = _cb_update("px:a:+")
+    assert asyncio.run(bot.pax_cb(u, context)) == bot.PAX
+    assert context.user_data["draft"]["pax"].adults == 2
+    q.edit_message_reply_markup.assert_awaited()
+
+    u2, q2 = _cb_update("px:go")
+    assert asyncio.run(bot.pax_cb(u2, context)) == bot.DATES
+    q2.edit_message_text.assert_awaited()
+
+
+def test_dates_pick_and_done_runs_search():
+    context = _ctx()
+    context.user_data["draft"] = {
+        "o": geo.airport("MOW"), "d": geo.airport("LBD"), "pax": Passengers(),
+        "y": 2026, "m": 9, "dep": None, "ret": None,
+    }
+    u, q = _cb_update("cal:day:2026-09-17")
+    assert asyncio.run(bot.dates_cb(u, context)) == bot.DATES
+    assert context.user_data["draft"]["dep"] == DATE
+
+    u2, q2 = _cb_update("cal:done")
+    state = asyncio.run(bot.dates_cb(u2, context))
+    assert state == bot.ConversationHandler.END
+    assert context.user_data["search"]["results"]
+
+
+def _make_search(chat_id=1):
+    svc = FlightService()
+    results = svc.search("MOW", "LBD", DATE, tick=1000)
+    return {
+        "o_code": "MOW", "o_city": "Москва", "d_code": "LBD", "d_city": "Худжанд",
+        "dep": DATE, "ret": None, "pax": Passengers(), "filters": Filters(),
+        "results": results, "page": 0,
+    }
+
+
+def test_results_pagination():
+    context = _ctx()
+    context.user_data["search"] = _make_search()
+    u, q = _cb_update("res:next")
+    asyncio.run(bot.results_cb(u, context))
+    assert context.user_data["search"]["page"] == 1
+    q.edit_message_text.assert_awaited()
+
+
+def test_filters_apply_rebuilds_results():
+    context = _ctx()
+    search = _make_search()
+    search["filters"] = Filters(direct_only=True)
+    context.user_data["search"] = search
+    u, q = _cb_update("flt:apply")
+    asyncio.run(bot.filters_cb(u, context))
+    assert all(p.itinerary.is_direct for p in context.user_data["search"]["results"])
+
+
+def test_poll_prices_sends_drop(monkeypatch):
+    svc = bot._service
+    prices = {t: svc.cheapest_price("MOW", "LBD", DATE, tick=t) for t in range(0, 60)}
     high = next(t for t in range(0, 59) if prices[t + 1] < prices[t])
     low = high + 1
-
-    bot._tracker.add(9090, "LON", "PAR", date, tick=high)
+    bot._tracker.add(555, "MOW", "LBD", DATE, tick=high)
     monkeypatch.setattr(bot, "_now_tick", lambda: low)
 
-    context = MagicMock()
-    context.bot = AsyncMock()
+    context = _ctx()
     asyncio.run(bot._poll_prices(context))
-
     context.bot.send_message.assert_awaited()
-    sent_text = context.bot.send_message.call_args.args[1]
-    assert "\u0426\u0435\u043d\u0430 \u0443\u043f\u0430\u043b\u0430" in sent_text  # "Price dropped"
+    assert "Цена упала" in context.bot.send_message.call_args.args[1]

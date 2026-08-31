@@ -1,76 +1,61 @@
 import datetime as dt
 
-from avia_bot.flights import FlightService
-from avia_bot.responses import (
-    cities_text,
-    hot_response,
-    parse_args,
-    range_response,
-    roundtrip_response,
-    search_response,
-)
+from avia_bot import responses
+from avia_bot.flights import Filters, FlightService
+from avia_bot.pricing import Passengers
 
+DATE = dt.date(2026, 9, 17)
 TICK = 1000
 
 
-def make_service():
-    return FlightService()
+def test_format_offer_direct_and_stops():
+    svc = FlightService()
+    res = svc.search("MOW", "LBD", DATE, tick=TICK)
+    direct = next(p for p in res if p.itinerary.is_direct)
+    conn = next(p for p in res if not p.itinerary.is_direct)
+
+    dtext = responses.format_offer(direct)
+    assert "TJS" in dtext and "Прямой" in dtext and "🛫" in dtext
+
+    ctext = responses.format_offer(conn)
+    assert "пересадк" in ctext
 
 
-def test_parse_args_splits_cities_dates_passengers():
-    parsed = parse_args(["LON", "NYC", "2026-09-05", "3"])
-    assert parsed.cities == ["LON", "NYC"]
-    assert parsed.dates == [dt.date(2026, 9, 5)]
-    assert parsed.passengers == 3
+def test_offer_buy_label_has_seats():
+    svc = FlightService()
+    offer = svc.search("MOW", "LBD", DATE, tick=TICK, limit=1)[0]
+    assert "Осталось" in responses.offer_buy_label(offer)
 
 
-def test_search_direct_route_shows_prices():
-    reply = search_response(make_service(), ["London", "Paris", "2026-09-05"], tick=TICK)
-    assert "LON \u2192 PAR" in reply
-    assert "$" in reply
+def test_results_header_shows_filters():
+    header = responses.results_header("Москва", "Худжанд", DATE, Passengers(2),
+                                      0, 5, Filters(direct_only=True))
+    assert "Москва → Худжанд" in header
+    assert "только прямые" in header
+    assert "1 из 5" in header
 
 
-def test_search_multiword_city_and_passengers():
-    reply = search_response(make_service(), ["New", "York", "Tokyo", "2026-09-06", "2"], tick=TICK)
-    assert "NYC \u2192 TYO" in reply
-    assert "\u043f\u0430\u0441\u0441" in reply  # mentions passengers
+def test_range_text_marks_cheapest():
+    svc = FlightService()
+    points = svc.search_range("MOW", "LBD", DATE, DATE + dt.timedelta(days=4), tick=TICK)
+    text = responses.range_text("Москва", "Худжанд", points, Passengers())
+    assert "самый дешёвый" in text
+    cheapest = min(p[1] for p in points)
+    from avia_bot.pricing import format_money
+    assert format_money(cheapest) in text
 
 
-def test_search_unknown_city():
-    reply = search_response(make_service(), ["Mars", "Venus"], tick=TICK)
-    assert "\u0440\u0430\u0441\u043f\u043e\u0437\u043d" in reply.lower()
+def test_dates_prompt_and_searching_bar():
+    assert "Вылет" in responses.dates_prompt(DATE, None)
+    assert "🟢" in responses.searching_bar(2)
 
 
-def test_search_no_direct_route_suggests_alternatives():
-    reply = search_response(make_service(), ["London", "Singapore"], tick=TICK)
-    assert "\u043f\u0440\u044f\u043c" in reply.lower()
+def test_drop_text():
+    txt = responses.drop_text("Москва", "Худжанд", DATE, 6000, 5000, 17)
+    assert "Цена упала" in txt and "−17%" in txt
 
 
-def test_range_response_marks_cheapest_and_returns_offers():
-    reply, offers = range_response(
-        make_service(), ["LON", "NYC", "2026-09-01", "2026-09-07"], tick=TICK
-    )
-    assert offers
-    assert "\u0441\u0430\u043c\u044b\u0439 \u0434\u0435\u0448\u0451\u0432\u044b\u0439" in reply.lower()
-    # cheapest mentioned price equals min of offers
-    cheapest = min(o.price_total for o in offers)
-    assert f"${cheapest}" in reply
-
-
-def test_roundtrip_response_shows_total():
-    reply = roundtrip_response(
-        make_service(), ["LON", "NYC", "2026-09-05", "2026-09-12", "2"], tick=TICK
-    )
-    assert "\u0422\u0443\u0434\u0430" in reply and "\u041e\u0431\u0440\u0430\u0442\u043d\u043e" in reply
-    assert "\u0418\u0442\u043e\u0433\u043e" in reply
-
-
-def test_hot_response_lists_deals():
-    reply = hot_response(make_service(), [], tick=TICK)
-    assert "\u0413\u043e\u0440\u044f\u0449\u0438\u0435" in reply
-    assert "%" in reply
-
-
-def test_cities_text_contains_known_city():
-    text = cities_text()
-    assert "Tashkent" in text and "TAS" in text
+def test_flexible_text_suggests_cheaper_day():
+    points = [(DATE, 6000), (DATE + dt.timedelta(days=1), 4000)]
+    txt = responses.flexible_text(points, DATE)
+    assert txt and "18 сентября" in txt

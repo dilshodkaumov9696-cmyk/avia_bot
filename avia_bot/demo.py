@@ -1,183 +1,121 @@
-"""Offline demo driving the same builders the Telegram bot uses.
+"""Offline demo of the guided-search engine (no Telegram token needed).
 
-    python -m avia_bot.demo                 # scripted conversation
-    python -m avia_bot.demo --interactive   # type your own commands
-    python -m avia_bot.demo --charts-dir DIR  # also save example PNG charts
+    python -m avia_bot.demo
+    python -m avia_bot.demo --charts-dir DIR
 
-Proves search, date-range, round-trip, passengers, hot deals and price
-tracking (with drop notifications) end-to-end without a Telegram token.
+Walks the same steps the bot's conversation does — city lookup, passengers,
+date, search, results, filters, flexible dates, tracking — using the pure engine.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import os
-import shlex
-from typing import List, Optional
+from typing import Optional
 
-from . import charts, responses
-from .flights import FlightService, parse_date, resolve_city
+from . import charts, geo, pricing, responses
+from .flights import Filters, FlightService
+from .pricing import Passengers
 from .tracking import PriceTracker
 
-# Fixed tick so the scripted transcript is deterministic run-to-run.
-DEMO_TICK = 1000
-DEMO_CHAT = 424242
+TICK = 1000
+CHAT = 424242
+DEP = _dt.date(2026, 9, 17)
 
 
-class Session:
-    def __init__(self) -> None:
-        self.service = FlightService()
-        self.tracker = PriceTracker(self.service)
-
-    def respond(self, message: str) -> str:
-        text = message.strip()
-        if not text:
-            return responses.HELP
-        if text.startswith("/"):
-            parts = shlex.split(text)
-            command = parts[0].lstrip("/").lower()
-            args = parts[1:]
-        else:
-            return responses.HELP
-
-        if command == "start":
-            return responses.WELCOME
-        if command == "help":
-            return responses.HELP
-        if command == "cities":
-            return responses.cities_text()
-        if command == "search":
-            return responses.search_response(self.service, args, tick=DEMO_TICK)
-        if command == "range":
-            return responses.range_response(self.service, args, tick=DEMO_TICK)[0]
-        if command == "rt":
-            return responses.roundtrip_response(self.service, args, tick=DEMO_TICK)
-        if command == "hot":
-            return responses.hot_response(self.service, args, tick=DEMO_TICK)
-        if command == "track":
-            return self._track(args)
-        if command == "mytracks":
-            return responses.mytracks_text(self.tracker.list_for(DEMO_CHAT))
-        return responses.HELP
-
-    def _track(self, args: List[str]) -> str:
-        parsed = responses.parse_args(args)
-        if len(parsed.cities) < 2 or not parsed.dates:
-            return "\u0424\u043e\u0440\u043c\u0430\u0442: /track \u043e\u0442\u043a\u0443\u0434\u0430 \u043a\u0443\u0434\u0430 \u0414\u0410\u0422\u0410 [\u043f\u0430\u0441\u0441.]"
-        origin, destination, unknown = responses._resolve_pair(parsed.cities)
-        if unknown:
-            return responses._unknown_msg(unknown)
-        _, quote = self.tracker.add(DEMO_CHAT, origin, destination, parsed.dates[0], parsed.passengers, tick=DEMO_TICK)
-        return responses.track_added_text(quote) if quote else "\u041d\u0435\u0442 \u0440\u0435\u0439\u0441\u043e\u0432."
+def _p(title: str) -> None:
+    print("\n" + "=" * 60 + f"\n{title}\n" + "=" * 60)
 
 
-_SCRIPT: List[str] = [
-    "/start",
-    "/cities",
-    "/search London Paris 2026-09-05",
-    "/search New York Tokyo 2026-09-06 2",
-    "/range LON NYC 2026-09-01 2026-09-07",
-    "/rt LON NYC 2026-09-05 2026-09-12 2",
-    "/hot",
-    "/search Mars Venus",
-]
+def _show(text: str) -> None:
+    for line in responses.render_plain(text).splitlines():
+        print("   " + line)
 
 
-def _print_exchange(message: str, reply: str) -> None:
-    print(f"\n\U0001f464 user: {message}")
-    print("\U0001f916 avia_bot:")
-    for line in responses.render_plain(reply).splitlines():
-        print(f"    {line}")
+def run(charts_dir: Optional[str] = None) -> None:
+    service = FlightService()
+    tracker = PriceTracker(service)
 
+    _p("Шаг 1. Город откуда")
+    print("user: Москва")
+    for a in geo.search_cities("Москва"):
+        print("   [", a.option_text, "]")
+    origin = geo.airport("MOW")
+    print("выбрано:", origin.option_text)
 
-def _simulate_tracking(session: Session) -> None:
-    """Register a track, then poll across ticks to trigger a real drop notice."""
+    _p("Шаг 2. Город куда")
+    print("user: Худжанд")
+    for a in geo.search_cities("Худжанд"):
+        print("   [", a.option_text, "]")
+    dest = geo.airport("LBD")
+    print("выбрано:", dest.option_text)
 
-    print("\n" + "-" * 60)
-    print("Price tracking simulation (route LON \u2192 PAR, 2026-09-05)")
-    print("-" * 60)
+    _p("Шаг 3. Пассажиры и класс")
+    pax = Passengers(adults=2, children=1, infants=0, cabin="economy")
+    print("выбрано:", pax.summary)
 
-    origin, destination = "LON", "PAR"
-    date = parse_date("2026-09-05")
+    _p(f"Шаг 4. Дата вылета: {responses.fmt_date(DEP)}")
 
-    # Find two ticks where the cheapest price falls, to demonstrate a drop.
-    prices = {t: session.service.cheapest(origin, destination, date, tick=t).price_total for t in range(0, 40)}
-    start_tick = next((t for t in range(0, 39) if prices[t + 1] < prices[t]), 0)
+    _p("Результаты поиска (Москва → Худжанд)")
+    results = service.search(origin.code, dest.code, DEP, pax=pax, tick=TICK)
+    for i, offer in enumerate(results):
+        print(f"\n--- Вариант {i + 1} из {len(results)} ---")
+        _show(responses.format_offer(offer))
+        print("   [", responses.offer_buy_label(offer), "]")
 
-    _, seed = session.tracker.add(DEMO_CHAT, origin, destination, date, tick=start_tick)
-    print(f"\nRegistered track at check #1: ${seed.price_total}")
+    _p("Фильтр: только прямые")
+    direct = service.search(origin.code, dest.code, DEP, pax=pax, tick=TICK, filters=Filters(direct_only=True))
+    print(f"прямых рейсов: {len(direct)} (из {len(results)})")
 
-    for offset in range(1, 6):
-        tick = start_tick + offset
-        drops = session.tracker.poll(tick)
-        track = session.tracker.list_for(DEMO_CHAT)[0]
+    _p("Гибкие даты ±3 дня")
+    flex = service.flexible_dates(origin.code, dest.code, DEP, pax=pax, tick=TICK)
+    for d, price in flex:
+        print(f"   {responses.fmt_date(d)}: {pricing.format_money(price)}")
+    _show(responses.flexible_text(flex, DEP) or "")
+
+    _p("Поиск по диапазону")
+    points = service.search_range(origin.code, dest.code, DEP, DEP + _dt.timedelta(days=6), pax=pax, tick=TICK)
+    _show(responses.range_text(origin.city, dest.city, points, pax))
+
+    _p("Отслеживание цены (симуляция падения)")
+    prices = {t: service.cheapest_price(origin.code, dest.code, DEP, pax=pax, tick=t) for t in range(0, 60)}
+    start = next((t for t in range(0, 59) if prices[t + 1] < prices[t]), 0)
+    _, seed = tracker.add(CHAT, origin.code, dest.code, DEP, pax=pax, tick=start)
+    print(f"Проверка #1: {pricing.format_money(seed)}")
+    for off in range(1, 6):
+        tick = start + off
+        drops = tracker.poll(tick)
+        track = tracker.list_for(CHAT)[0]
         note = ""
-        for event in drops:
-            note = "  " + responses.render_plain(
-                responses.drop_text(
-                    event.track.origin, event.track.destination, event.track.date,
-                    event.previous_price, event.new_price, event.drop_pct,
-                )
+        for e in drops:
+            note = "   " + responses.render_plain(
+                responses.drop_text(origin.city, dest.city, DEP, e.previous_price, e.new_price, e.drop_pct)
             ).replace("\n", " ")
-        print(f"Check #{offset + 1} (tick {tick}): ${track.last_price}{note}")
+        print(f"Проверка #{off + 1} (tick {tick}): {pricing.format_money(track.last_price)}{note}")
 
-    print("\n" + responses.render_plain(responses.mytracks_text(session.tracker.list_for(DEMO_CHAT))))
+    _p("Горящие билеты")
+    _show(responses.hot_text(service.cheapest_deals(tick=TICK)))
 
-
-def _save_charts(session: Session, charts_dir: str) -> None:
-    os.makedirs(charts_dir, exist_ok=True)
-    offers = session.service.search_range("LON", "NYC", parse_date("2026-09-01"), parse_date("2026-09-10"), tick=DEMO_TICK)
-    range_path = os.path.join(charts_dir, "range_chart.png")
-    with open(range_path, "wb") as fh:
-        fh.write(charts.render_range_chart(offers))
-
-    track = session.tracker.list_for(DEMO_CHAT)
-    hist_path = None
-    if track:
-        hist_path = os.path.join(charts_dir, "history_chart.png")
-        with open(hist_path, "wb") as fh:
-            fh.write(charts.render_history_chart(track[0]))
-    print(f"\nSaved charts: {range_path}" + (f", {hist_path}" if hist_path else ""))
-
-
-def run_scripted(charts_dir: Optional[str] = None) -> None:
-    session = Session()
-    print("=" * 60)
-    print("avia_bot offline demo (scripted conversation)")
-    print("=" * 60)
-    for message in _SCRIPT:
-        _print_exchange(message, session.respond(message))
-    _simulate_tracking(session)
     if charts_dir:
-        _save_charts(session, charts_dir)
+        os.makedirs(charts_dir, exist_ok=True)
+        with open(os.path.join(charts_dir, "range_chart.png"), "wb") as fh:
+            fh.write(charts.render_range_chart(origin.city, dest.city, points))
+        track = tracker.list_for(CHAT)[0]
+        with open(os.path.join(charts_dir, "history_chart.png"), "wb") as fh:
+            fh.write(charts.render_history_chart(track))
+        print(f"\nSaved charts to {charts_dir}")
+
     print("\n" + "=" * 60)
-    print("Demo complete \u2014 search, range, round-trip, hot deals & tracking exercised.")
+    print("Демо завершено — весь сценарий как у AviaGram отработал.")
     print("=" * 60)
-
-
-def run_interactive() -> None:
-    session = Session()
-    print("avia_bot interactive demo. Type a command (or 'quit').")
-    while True:
-        try:
-            message = input("you> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        if message.lower() in {"quit", "exit"}:
-            break
-        print(session.respond(message))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="avia_bot offline demo")
-    parser.add_argument("--interactive", action="store_true", help="interactive chat session")
-    parser.add_argument("--charts-dir", default=None, help="directory to save example PNG charts")
+    parser.add_argument("--charts-dir", default=None)
     args = parser.parse_args()
-    if args.interactive:
-        run_interactive()
-    else:
-        run_scripted(charts_dir=args.charts_dir)
+    run(charts_dir=args.charts_dir)
 
 
 if __name__ == "__main__":
