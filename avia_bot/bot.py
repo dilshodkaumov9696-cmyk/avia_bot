@@ -54,10 +54,15 @@ async def _reply(update: Update, text: str) -> None:
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
+async def _post_init(application: Application) -> None:
+    me = await application.bot.get_me()
+    logger.info("Connected to Telegram as @%s (id=%s)", me.username, me.id)
+
+
 def build_application(token: str) -> Application:
     """Create the Telegram application with all handlers registered."""
 
-    application = Application.builder().token(token).build()
+    application = Application.builder().token(token).post_init(_post_init).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("cities", cities))
@@ -71,6 +76,9 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
+    # httpx logs each request URL at INFO, and Telegram embeds the bot token in
+    # the URL path, so keep it at WARNING to avoid leaking the token into logs.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         raise SystemExit(
