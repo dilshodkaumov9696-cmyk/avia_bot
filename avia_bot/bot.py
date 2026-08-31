@@ -55,11 +55,18 @@ def _menu_markup() -> InlineKeyboardMarkup:
     )
 
 
-def _track_button(quote) -> InlineKeyboardMarkup:
-    data = f"trk|{quote.origin}|{quote.destination}|{quote.date.isoformat()}|{quote.passengers}"
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton("\U0001f440 \u041e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u0442\u044c \u0446\u0435\u043d\u0443", callback_data=data)]]
+def _buy_button(origin, destination, out_date, back_date=None, passengers=1, label="\U0001f517 \u041a\u0443\u043f\u0438\u0442\u044c") -> InlineKeyboardButton:
+    url = responses.aviasales_url(origin, destination, out_date, back_date=back_date, passengers=passengers)
+    return InlineKeyboardButton(label, url=url)
+
+
+def _offer_markup(quote) -> InlineKeyboardMarkup:
+    track = InlineKeyboardButton(
+        "\U0001f440 \u041e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u0442\u044c \u0446\u0435\u043d\u0443",
+        callback_data=f"trk|{quote.origin}|{quote.destination}|{quote.date.isoformat()}|{quote.passengers}",
     )
+    buy = _buy_button(quote.origin, quote.destination, quote.date, passengers=quote.passengers)
+    return InlineKeyboardMarkup([[buy, track]])
 
 
 def _range_chart_button(quotes) -> InlineKeyboardMarkup:
@@ -75,15 +82,23 @@ def _range_chart_button(quotes) -> InlineKeyboardMarkup:
 
 async def _reply(update: Update, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
     if update.message is not None:
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+        await update.message.reply_text(
+            responses.render_html(text), parse_mode=ParseMode.HTML, reply_markup=markup
+        )
+
+
+async def _cb_reply(query, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
+    await query.message.reply_text(
+        responses.render_html(text), parse_mode=ParseMode.HTML, reply_markup=markup
+    )
 
 
 async def _send_photo(bot, chat_id: int, png: bytes, caption: str | None = None) -> None:
     await bot.send_photo(
         chat_id=chat_id,
         photo=InputFile(io.BytesIO(png), filename="chart.png"),
-        caption=caption,
-        parse_mode=ParseMode.MARKDOWN,
+        caption=responses.render_html(caption) if caption else None,
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -113,7 +128,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if origin and destination and origin != destination:
             best = _service.cheapest(origin, destination, parsed.dates[0], passengers=parsed.passengers, tick=_now_tick())
             if best is not None:
-                markup = _track_button(best)
+                markup = _offer_markup(best)
     await _reply(update, text, markup)
 
 
@@ -123,7 +138,20 @@ async def range_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def roundtrip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, responses.roundtrip_response(_service, context.args or [], tick=_now_tick()))
+    args = context.args or []
+    text = responses.roundtrip_response(_service, args, tick=_now_tick())
+    parsed = responses.parse_args(args)
+    markup = None
+    if len(parsed.cities) >= 2 and len(parsed.dates) >= 2:
+        origin, destination, unknown = responses._resolve_pair(parsed.cities)
+        if origin and destination and not unknown and origin != destination:
+            out_date, back_date = sorted(parsed.dates[:2])
+            buy = _buy_button(
+                origin, destination, out_date, back_date=back_date, passengers=parsed.passengers,
+                label="\U0001f517 \u041a\u0443\u043f\u0438\u0442\u044c (\u0442\u0443\u0434\u0430-\u043e\u0431\u0440\u0430\u0442\u043d\u043e)",
+            )
+            markup = InlineKeyboardMarkup([[buy]])
+    await _reply(update, text, markup)
 
 
 async def hot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -183,30 +211,24 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = query.message.chat_id if query.message else None
 
     if data == "m:help":
-        await query.message.reply_text(responses.HELP, parse_mode=ParseMode.MARKDOWN)
+        await _cb_reply(query, responses.HELP)
     elif data == "m:cities":
-        await query.message.reply_text(responses.cities_text(), parse_mode=ParseMode.MARKDOWN)
+        await _cb_reply(query, responses.cities_text())
     elif data == "m:hot":
-        await query.message.reply_text(
-            responses.hot_response(_service, [], tick=_now_tick()), parse_mode=ParseMode.MARKDOWN
-        )
+        await _cb_reply(query, responses.hot_response(_service, [], tick=_now_tick()))
     elif data == "m:search":
-        await query.message.reply_text(
-            "\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435: `/search London Dubai 2026-09-05`", parse_mode=ParseMode.MARKDOWN
-        )
+        await _cb_reply(query, "\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435: `/search London Dubai 2026-09-05`")
     elif data == "m:range":
-        await query.message.reply_text(
-            "\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435: `/range LON NYC 2026-09-01 2026-09-10`", parse_mode=ParseMode.MARKDOWN
-        )
+        await _cb_reply(query, "\u041e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435: `/range LON NYC 2026-09-01 2026-09-10`")
     elif data == "m:mytracks":
         tracks = _tracker.list_for(chat_id) if chat_id is not None else []
-        await query.message.reply_text(responses.mytracks_text(tracks), parse_mode=ParseMode.MARKDOWN)
+        await _cb_reply(query, responses.mytracks_text(tracks))
     elif data.startswith("trk|") and chat_id is not None:
         _, o, d, date_s, pax = data.split("|")
         date = parse_date(date_s)
         _, quote = _tracker.add(chat_id, o, d, date, int(pax), tick=_now_tick())
         if quote is not None:
-            await query.message.reply_text(responses.track_added_text(quote), parse_mode=ParseMode.MARKDOWN)
+            await _cb_reply(query, responses.track_added_text(quote))
     elif data.startswith("rc|"):
         _, o, d, start_s, end_s, pax = data.split("|")
         offers = _service.search_range(o, d, parse_date(start_s), parse_date(end_s), passengers=int(pax), tick=_now_tick())
@@ -215,8 +237,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     elif data.startswith("unt|") and chat_id is not None:
         key = data[len("unt|"):]
         removed = _tracker.remove(chat_id, key)
-        await query.message.reply_text(
-            "\u0423\u0434\u0430\u043b\u0438\u043b \u043e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u043d\u0438\u0435." if removed else "\u041e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u043d\u0438\u0435 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e."
+        await _cb_reply(
+            query,
+            "\u0423\u0434\u0430\u043b\u0438\u043b \u043e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u043d\u0438\u0435." if removed else "\u041e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u043d\u0438\u0435 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e.",
         )
 
 
@@ -231,11 +254,17 @@ async def _poll_prices(context: ContextTypes.DEFAULT_TYPE) -> None:
             event.previous_price, event.new_price, event.drop_pct,
         )
         try:
-            await context.bot.send_message(event.track.chat_id, text, parse_mode=ParseMode.MARKDOWN)
+            await context.bot.send_message(
+                event.track.chat_id, responses.render_html(text), parse_mode=ParseMode.HTML
+            )
             if len(event.track.history) >= 2:
                 await _send_photo(context.bot, event.track.chat_id, charts.render_history_chart(event.track))
         except Exception:  # noqa: BLE001 - never let one bad chat kill the job
             logger.exception("Failed to notify chat %s", event.track.chat_id)
+
+
+async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("Unhandled error while processing update", exc_info=context.error)
 
 
 async def _post_init(application: Application) -> None:
@@ -259,6 +288,7 @@ def build_application(token: str) -> Application:
     application.add_handler(CommandHandler("mytracks", mytracks))
     application.add_handler(CallbackQueryHandler(on_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, fallback))
+    application.add_error_handler(_on_error)
     return application
 
 

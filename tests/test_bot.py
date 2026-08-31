@@ -21,13 +21,33 @@ def _make_update(args=None, chat_id=1):
     return update, context
 
 
-def test_search_handler_attaches_track_button():
+def _callback_datas(markup):
+    return [btn.callback_data for row in markup.inline_keyboard for btn in row if btn.callback_data]
+
+
+def _button_urls(markup):
+    return [btn.url for row in markup.inline_keyboard for btn in row if btn.url]
+
+
+def test_search_handler_attaches_track_and_buy_buttons():
     update, context = _make_update(["London", "Paris", "2026-09-05"])
     asyncio.run(bot.search(update, context))
     update.message.reply_text.assert_called_once()
     markup = update.message.reply_text.call_args.kwargs["reply_markup"]
     assert markup is not None
-    assert "trk|LON|PAR|2026-09-05" in markup.inline_keyboard[0][0].callback_data
+    assert any("trk|LON|PAR|2026-09-05" in cd for cd in _callback_datas(markup))
+    assert any("aviasales.com/search/LON0509PAR" in url for url in _button_urls(markup))
+
+
+def test_search_handler_uses_html_parse_mode():
+    from telegram.constants import ParseMode
+
+    update, context = _make_update(["London", "Paris", "2026-09-05"])
+    asyncio.run(bot.search(update, context))
+    assert update.message.reply_text.call_args.kwargs["parse_mode"] == ParseMode.HTML
+    # rendered text must not contain raw markup asterisks
+    sent = update.message.reply_text.call_args.args[0]
+    assert "<b>" in sent and "*" not in sent
 
 
 def test_range_handler_attaches_chart_button():

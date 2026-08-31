@@ -7,10 +7,57 @@ sees can be unit-tested and exercised in the CLI demo without a bot token.
 from __future__ import annotations
 
 import datetime as _dt
+import html as _html
+import re as _re
 from typing import List, Optional, Sequence, Tuple
 
 from .flights import CITIES, FlightService, parse_date, resolve_city
 from .pricing import Quote
+
+# Reply builders author text in a tiny markup: *bold* and `monospace`.
+# Telegram's legacy Markdown miscomputes entity offsets around emoji, so the
+# bot renders to HTML instead (emoji-safe). These helpers do that conversion.
+_BOLD = _re.compile(r"\*(.+?)\*", _re.S)
+_CODE = _re.compile(r"`(.+?)`", _re.S)
+
+
+def render_html(text: str) -> str:
+    """Convert the internal *bold*/`code` markup to Telegram-safe HTML."""
+
+    escaped = _html.escape(text, quote=False)
+    escaped = _CODE.sub(lambda m: f"<code>{m.group(1)}</code>", escaped)
+    escaped = _BOLD.sub(lambda m: f"<b>{m.group(1)}</b>", escaped)
+    return escaped
+
+
+def render_plain(text: str) -> str:
+    """Strip the markup markers for plain-text contexts (e.g. the CLI demo)."""
+
+    text = _BOLD.sub(lambda m: m.group(1), text)
+    text = _CODE.sub(lambda m: m.group(1), text)
+    return text
+
+
+def aviasales_url(
+    origin: str,
+    destination: str,
+    out_date: _dt.date,
+    back_date: Optional[_dt.date] = None,
+    passengers: int = 1,
+) -> str:
+    """Build a real Aviasales deep-link search URL for a route/date/pax.
+
+    Aviasales encodes a search as ``ORIGIN`` + ``DDMM`` + ``DEST`` + optional
+    return ``DDMM`` + passenger count, e.g. ``LON0509NYC1``.
+    """
+
+    def ddmm(d: _dt.date) -> str:
+        return f"{d.day:02d}{d.month:02d}"
+
+    url = f"https://www.aviasales.com/search/{origin}{ddmm(out_date)}{destination}"
+    if back_date is not None:
+        url += ddmm(back_date)
+    return url + str(max(1, passengers))
 
 WELCOME = (
     "\u2708\ufe0f *AviaBot* \u2014 \u043f\u043e\u0438\u0441\u043a \u0438 \u043e\u0442\u0441\u043b\u0435\u0436\u0438\u0432\u0430\u043d\u0438\u0435 \u0430\u0432\u0438\u0430\u0431\u0438\u043b\u0435\u0442\u043e\u0432.\n\n"

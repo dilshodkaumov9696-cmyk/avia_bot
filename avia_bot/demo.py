@@ -86,7 +86,7 @@ _SCRIPT: List[str] = [
 def _print_exchange(message: str, reply: str) -> None:
     print(f"\n\U0001f464 user: {message}")
     print("\U0001f916 avia_bot:")
-    for line in reply.splitlines():
+    for line in responses.render_plain(reply).splitlines():
         print(f"    {line}")
 
 
@@ -113,13 +113,15 @@ def _simulate_tracking(session: Session) -> None:
         track = session.tracker.list_for(DEMO_CHAT)[0]
         note = ""
         for event in drops:
-            note = "  \U0001f525 " + responses.drop_text(
-                event.track.origin, event.track.destination, event.track.date,
-                event.previous_price, event.new_price, event.drop_pct,
+            note = "  " + responses.render_plain(
+                responses.drop_text(
+                    event.track.origin, event.track.destination, event.track.date,
+                    event.previous_price, event.new_price, event.drop_pct,
+                )
             ).replace("\n", " ")
         print(f"Check #{offset + 1} (tick {tick}): ${track.last_price}{note}")
 
-    print("\n" + responses.mytracks_text(session.tracker.list_for(DEMO_CHAT)))
+    print("\n" + responses.render_plain(responses.mytracks_text(session.tracker.list_for(DEMO_CHAT))))
 
 
 def _save_charts(session: Session, charts_dir: str) -> None:
