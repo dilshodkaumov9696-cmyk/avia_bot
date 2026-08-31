@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import datetime as _dt
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+from . import pricing
+from .pricing import Quote
 
 # Canonical city name -> IATA-style code. Lookups are case-insensitive and also
 # accept the code itself, so "london", "LONDON" and "LON" all resolve.
@@ -119,33 +122,116 @@ def _build_catalogue(days_ahead: int = 30) -> List[Flight]:
 
 
 class FlightService:
-    """Searches the in-memory flight catalogue."""
+    """Searches the in-memory flight catalogue and prices offers dynamically."""
 
     def __init__(self, catalogue: Optional[List[Flight]] = None) -> None:
         self._catalogue = catalogue if catalogue is not None else _build_catalogue()
 
-    def search(
-        self,
-        origin: str,
-        destination: str,
-        date: Optional[_dt.date] = None,
-        limit: int = 5,
+    @staticmethod
+    def _tick(tick: Optional[int]) -> int:
+        return pricing.current_tick() if tick is None else tick
+
+    def _legs(
+        self, origin: str, destination: str, date: Optional[_dt.date] = None
     ) -> List[Flight]:
-        """Return up to ``limit`` flights, cheapest first, matching the route.
-
-        ``origin`` and ``destination`` must already be resolved IATA codes.
-        When ``date`` is ``None`` every date on the route is considered.
-        """
-
-        matches = [
+        return [
             f
             for f in self._catalogue
             if f.origin == origin
             and f.destination == destination
             and (date is None or f.date == date)
         ]
-        matches.sort(key=lambda f: (f.price_usd, f.date, f.depart))
-        return matches[:limit]
+
+    def search(
+        self,
+        origin: str,
+        destination: str,
+        date: Optional[_dt.date] = None,
+        passengers: int = 1,
+        tick: Optional[int] = None,
+        limit: int = 5,
+    ) -> List[Quote]:
+        """Return up to ``limit`` priced offers, cheapest first, for the route.
+
+        ``origin`` and ``destination`` must already be resolved IATA codes.
+        When ``date`` is ``None`` every date on the route is considered.
+        """
+
+        tick = self._tick(tick)
+        quotes = [pricing.quote(f, tick, passengers) for f in self._legs(origin, destination, date)]
+        quotes.sort(key=lambda q: (q.price_total, q.date, q.depart))
+        return quotes[:limit]
+
+    def cheapest(
+        self,
+        origin: str,
+        destination: str,
+        date: _dt.date,
+        passengers: int = 1,
+        tick: Optional[int] = None,
+    ) -> Optional[Quote]:
+        """Return the single cheapest offer on a route/date, or ``None``."""
+
+        offers = self.search(origin, destination, date=date, passengers=passengers, tick=tick, limit=1)
+        return offers[0] if offers else None
+
+    def search_range(
+        self,
+        origin: str,
+        destination: str,
+        start: _dt.date,
+        end: _dt.date,
+        passengers: int = 1,
+        tick: Optional[int] = None,
+    ) -> List[Quote]:
+        """Return the cheapest offer for each date in ``[start, end]`` (sorted by date)."""
+
+        tick = self._tick(tick)
+        if end < start:
+            start, end = end, start
+        results: List[Quote] = []
+        day = start
+        while day <= end:
+            best = self.cheapest(origin, destination, day, passengers=passengers, tick=tick)
+            if best is not None:
+                results.append(best)
+            day += _dt.timedelta(days=1)
+        return results
+
+    def round_trip(
+        self,
+        origin: str,
+        destination: str,
+        out_date: _dt.date,
+        back_date: _dt.date,
+        passengers: int = 1,
+        tick: Optional[int] = None,
+    ) -> Optional[Tuple[Quote, Quote, int]]:
+        """Return ``(outbound, inbound, total_price)`` for the cheapest round trip."""
+
+        tick = self._tick(tick)
+        out = self.cheapest(origin, destination, out_date, passengers=passengers, tick=tick)
+        back = self.cheapest(destination, origin, back_date, passengers=passengers, tick=tick)
+        if out is None or back is None:
+            return None
+        return out, back, out.price_total + back.price_total
+
+    def cheapest_deals(
+        self, passengers: int = 1, tick: Optional[int] = None, limit: int = 5
+    ) -> List[Quote]:
+        """Return the offers with the biggest current discount vs their list price."""
+
+        tick = self._tick(tick)
+        best_per_route: Dict[str, Quote] = {}
+        for flight in self._catalogue:
+            q = pricing.quote(flight, tick, passengers)
+            key = pricing.route_key(q.origin, q.destination)
+            current = best_per_route.get(key)
+            if current is None or q.price_total < current.price_total:
+                best_per_route[key] = q
+        deals = [q for q in best_per_route.values() if q.discount_pct > 0]
+        deals.sort(key=lambda q: (-q.discount_pct, q.price_total))
+        return deals[:limit]
 
     def routes_from(self, origin: str) -> List[str]:
         """Return the sorted list of destinations reachable non-stop from ``origin``."""

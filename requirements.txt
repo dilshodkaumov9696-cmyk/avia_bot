@@ -1,3 +1,5 @@
-# Runtime dependency for the Telegram bot. The flight-search core and the
-# offline demo do not need it, but running the live bot does.
-python-telegram-bot>=21.0,<23.0
+# Runtime dependencies for the Telegram bot.
+# - job-queue extra: periodic price-tracking checks
+# - matplotlib: rendering price charts sent to chat
+python-telegram-bot[job-queue]>=21.0,<23.0
+matplotlib>=3.7,<4.0
