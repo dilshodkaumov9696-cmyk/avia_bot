@@ -127,6 +127,15 @@ def test_filters_apply_rebuilds_results():
     assert all(p.itinerary.is_direct for p in context.user_data["search"]["results"])
 
 
+def test_language_callback_sets_language():
+    context = _ctx()
+    u, q = _cb_update("lng:uz")
+    asyncio.run(bot.language_cb(u, context))
+    assert context.user_data["lang"] == "uz"
+    q.edit_message_text.assert_awaited()
+    q.message.reply_text.assert_awaited()  # welcome resent in new language
+
+
 def test_poll_prices_sends_drop(monkeypatch):
     svc = bot._service
     prices = {t: svc.cheapest_price("MOW", "LBD", DATE, tick=t) for t in range(0, 60)}

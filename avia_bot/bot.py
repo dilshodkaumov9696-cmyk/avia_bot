@@ -182,7 +182,7 @@ async def language_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await query.answer()
     code = i18n.normalize(query.data.split(":")[1])
     context.user_data["lang"] = code
-    await _edit(query, t(code, "language_set", lang=i18n.language_label(code), cur=i18n.currency_of(code)))
+    await _edit(query, t(code, "language_set", name=i18n.language_label(code), cur=i18n.currency_of(code)))
     if query.message is not None:
         await query.message.reply_text(responses.render_html(responses.welcome(code)),
                                         parse_mode=ParseMode.HTML, reply_markup=_main_kb(code))
