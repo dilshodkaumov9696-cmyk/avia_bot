@@ -1,8 +1,8 @@
-"""Reply text builders shared by the bot and the offline demo.
+"""Language-aware reply builders shared by the bot and the offline demo.
 
-Text is authored in a tiny markup (*bold*, `code`) and rendered to Telegram-safe
-HTML by :func:`render_html` (emoji-safe, unlike legacy Markdown). Nothing here
-imports python-telegram-bot, so every string is unit-testable.
+Text is looked up per language via :mod:`avia_bot.i18n` (with Russian fallback)
+and prices are converted to the user's currency. Assembled strings use a tiny
+markup (*bold*, `code`) rendered to Telegram-safe HTML by :func:`render_html`.
 """
 
 from __future__ import annotations
@@ -10,20 +10,15 @@ from __future__ import annotations
 import datetime as _dt
 import html as _html
 import re as _re
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
-from . import pricing
+from . import i18n, pricing
 from .flights import Filters, Priced, fmt_duration
 from .geo import Airport
-from .pricing import Passengers, format_money
+from .i18n import fmt_date, fmt_dt, money, t
 
 _BOLD = _re.compile(r"\*(.+?)\*", _re.S)
 _CODE = _re.compile(r"`(.+?)`", _re.S)
-
-MONTH_GEN = [
-    "", "января", "февраля", "марта", "апреля", "мая", "июня",
-    "июля", "августа", "сентября", "октября", "ноября", "декабря",
-]
 
 
 def render_html(text: str) -> str:
@@ -39,14 +34,6 @@ def render_plain(text: str) -> str:
     return text
 
 
-def fmt_date(date: _dt.date) -> str:
-    return f"{date.day} {MONTH_GEN[date.month]}"
-
-
-def fmt_dt(value: _dt.datetime) -> str:
-    return f"{value.day} {MONTH_GEN[value.month]} {value:%H:%M}"
-
-
 def aviasales_url(origin: str, destination: str, out_date: _dt.date,
                   back_date: Optional[_dt.date] = None, passengers: int = 1) -> str:
     def ddmm(d: _dt.date) -> str:
@@ -58,31 +45,14 @@ def aviasales_url(origin: str, destination: str, out_date: _dt.date,
     return url + str(max(1, passengers))
 
 
-# --- static prompts --------------------------------------------------------
+# --- prompts ---------------------------------------------------------------
 
-WELCOME = (
-    "✈️ *AviaBot* — поиск и отслеживание авиабилетов.\n\n"
-    "Я помогу найти дешёвые билеты по датам и диапазону, туда-обратно, "
-    "для нескольких пассажиров, и буду следить за ценой. 🔥\n\n"
-    "Нажмите *🔎 Поиск* внизу, чтобы начать, или /help."
-)
+def welcome(lang: str) -> str:
+    return t(lang, "welcome")
 
-HELP = (
-    "*Как пользоваться*\n"
-    "🔎 *Поиск* — пошаговый поиск: город откуда → куда → пассажиры и класс → даты.\n"
-    "🔎🗓 *По диапазону* — самый дешёвый день в диапазоне дат.\n"
-    "👀 *Добавить отслеживание* — следить за ценой (уведомлю о падении).\n"
-    "🔥 /hot — горящие предложения.\n"
-    "🗂 /mytracks — мои отслеживания.\n\n"
-    "Команды: /search, /range, /hot, /mytracks, /cancel."
-)
 
-ASK_FROM = "🏠 Введите город откуда летите (Пример: Москва)"
-CHOOSE_FROM = "Выберите из списка откуда отправляетесь"
-ASK_TO = "🛫 Введите город куда вы летите (Пример: Худжанд)"
-CHOOSE_TO = "Выберите из списка куда летите"
-PAX_PROMPT = "Выберите кол-во пассажиров и класс"
-CITY_NOT_FOUND = "Не нашёл такой город. Попробуйте ещё раз (например: Москва, Ташкент, Дубай)."
+def help_text(lang: str) -> str:
+    return t(lang, "help")
 
 
 def route_line(origin: Airport, destination: Airport) -> str:
@@ -90,169 +60,165 @@ def route_line(origin: Airport, destination: Airport) -> str:
 
 
 def route_line_from(origin: Airport) -> str:
-    return f"📍 Откуда: {origin.city} ({origin.code})"
+    return f"📍 {origin.city} ({origin.code})"
 
 
-def mytracks_hint() -> str:
-    return "Слежу за ценой — сообщу о падении. /mytracks — список."
-
-
-def dates_prompt(dep: Optional[_dt.date], ret: Optional[_dt.date]) -> str:
-    dep_s = fmt_date(dep) if dep else "─────"
-    ret_s = fmt_date(ret) if ret else "─────"
-    return (
-        "🗓 Выберите день вылета и обратно (если нужно).\n"
-        f"🚀 Вылет: {dep_s}\n"
-        f"🔄 Обратно: {ret_s}"
-    )
+def dates_prompt(lang: str, dep: Optional[_dt.date], ret: Optional[_dt.date]) -> str:
+    dep_s = fmt_date(lang, dep) if dep else "─────"
+    ret_s = fmt_date(lang, ret) if ret else "─────"
+    return (t(lang, "dates_hint") + "\n"
+            + f"{t(lang, 'label_depart')}: {dep_s}\n"
+            + f"{t(lang, 'label_return')}: {ret_s}")
 
 
 _PROVIDERS = ["Nebo.Travel", "Superkassa", "Aviasales", "Kupibilet"]
 
 
-def searching_bar(step: int, total: int = 4) -> str:
+def searching_bar(lang: str, step: int, total: int = 4) -> str:
     filled = "🟢" * step
     empty = "⚪" * max(0, total - step)
     provider = _PROVIDERS[min(step, len(_PROVIDERS)) - 1] if step else _PROVIDERS[0]
-    return f"{filled}{empty} Ищу на {provider}…"
+    return f"{filled}{empty} " + t(lang, "searching", p=provider)
 
 
-# --- result formatting -----------------------------------------------------
+# --- passengers ------------------------------------------------------------
+
+def cabin_label(lang: str, cabin: str) -> str:
+    return t(lang, "business" if cabin == "business" else "economy")
 
 
-def offer_buy_label(priced: Priced) -> str:
-    return f"Купить билет (Осталось: {priced.itinerary.seats_left})"
+def pax_summary(lang: str, pax: pricing.Passengers) -> str:
+    parts = [f"{pax.adults} {t(lang, 'ab_adult')}"]
+    if pax.children:
+        parts.append(f"{pax.children} {t(lang, 'ab_child')}")
+    if pax.infants:
+        parts.append(f"{pax.infants} {t(lang, 'ab_infant')}")
+    return ", ".join(parts) + f", {cabin_label(lang, pax.cabin)}"
 
 
-def format_offer(priced: Priced) -> str:
+# --- result cards ----------------------------------------------------------
+
+def offer_buy_label(lang: str, priced: Priced) -> str:
+    return f"{t(lang, 'btn_buy')} ({t(lang, 'seats_left')}: {priced.itinerary.seats_left})"
+
+
+def format_offer(lang: str, priced: Priced) -> str:
     it = priced.itinerary
-    lines: List[str] = []
+    lines = []
     tags = []
     if priced.is_fastest:
-        tags.append("🔴 Самый быстрый 🏎")
+        tags.append(t(lang, "tag_fastest"))
     if priced.is_cheapest:
-        tags.append("🟢 Самый дешёвый 💸")
+        tags.append(t(lang, "tag_cheapest"))
     if tags:
         lines.append(" · ".join(tags))
 
-    money = f"💰 *{format_money(priced.price_total)}*"
+    price = f"💰 *{money(lang, priced.price_total)}*"
     if priced.discount_pct > 0:
-        money += f"   🔥 -{priced.discount_pct}%"
-    lines.append(money)
+        price += f"   🔥 -{priced.discount_pct}%"
+    lines.append(price)
     if priced.pax.total > 1:
-        lines.append(f"👥 {priced.pax.summary} · {format_money(priced.per_adult)}/взр.")
+        lines.append(f"👥 {pax_summary(lang, priced.pax)} · " + t(lang, "per_adult", m=money(lang, priced.per_adult)))
     lines.append(f"🛫 {it.airline}")
-    lines.append("🧳 С багажом" if it.baggage else "🎒 Без багажа")
+    lines.append(t(lang, "bag_yes") if it.baggage else t(lang, "bag_no"))
     lines.append("")
-    lines.append("— Туда:")
-    lines.append(f"📅 {fmt_dt(it.dep)} — {fmt_dt(it.arr)}")
+    lines.append(t(lang, "leg_there"))
+    lines.append(f"📅 {fmt_dt(lang, it.dep)} — {fmt_dt(lang, it.arr)}")
     if it.is_direct:
-        lines.append(f"🕐 {it.duration_str} ➡️ Прямой")
+        lines.append(f"🕐 {it.duration_str} ➡️ {t(lang, 'direct')}")
     else:
         stops = it.stop_infos()
-        joined = ", ".join(f"{city} {fmt_duration(lay)}" for city, lay in stops)
-        word = "пересадка" if len(stops) == 1 else "пересадки"
-        lines.append(f"🔀 {len(stops)} {word}: {joined}")
+        info = ", ".join(f"{city} {fmt_duration(lay)}" for city, lay in stops)
+        lines.append(t(lang, "transfers", n=len(stops), info=info))
         lines.append(f"⏱ {it.duration_str}")
     return "\n".join(lines)
 
 
-def results_header(origin: str, destination: str, date: _dt.date, pax: Passengers,
-                   page: int, total_pages: int, filters: Filters) -> str:
-    head = f"📍 {origin} → {destination} · {fmt_date(date)} · {pax.summary}"
+def results_header(lang: str, origin: str, destination: str, date: _dt.date,
+                   pax: pricing.Passengers, page: int, total_pages: int, filters: Filters) -> str:
+    head = f"📍 {origin} → {destination} · {fmt_date(lang, date)} · {pax_summary(lang, pax)}"
     if filters.active:
         flags = []
         if filters.direct_only:
-            flags.append("только прямые")
+            flags.append(t(lang, "flt_direct").lower())
         if filters.with_baggage:
-            flags.append("с багажом")
-        head += f"\n⚙️ Фильтры: {', '.join(flags)}"
-    head += f"\nВариант {page + 1} из {total_pages}"
+            flags.append(t(lang, "flt_bag").lower())
+        head += "\n" + t(lang, "filters_label", f=", ".join(flags))
+    head += "\n" + t(lang, "variant", i=page + 1, n=total_pages)
     return head
 
 
-def no_results_text(filters_active: bool) -> str:
-    if filters_active:
-        return "По этим фильтрам рейсов нет. Нажмите «Фильтры», чтобы смягчить условия."
-    return "На эту дату рейсов не нашлось. Попробуйте другую дату или город."
+def no_results_text(lang: str, filters_active: bool) -> str:
+    return t(lang, "no_results_filters") if filters_active else t(lang, "no_results")
 
 
-def price_advice_text(origin: str, destination: str, trend: str) -> Optional[str]:
+def price_advice_text(lang: str, trend: str) -> Optional[str]:
     if trend == "падает":
-        return "💡 Совет: цена сейчас снижается — можно немного подождать или включить отслеживание."
+        return t(lang, "advice_down")
     if trend == "растёт":
-        return "💡 Совет: цена растёт — брать выгоднее сейчас."
+        return t(lang, "advice_up")
     return None
 
 
-def flexible_text(points: Sequence[Tuple[_dt.date, int]], chosen: _dt.date) -> Optional[str]:
+def flexible_text(lang: str, points: Sequence[Tuple[_dt.date, int]], chosen: _dt.date) -> Optional[str]:
     if not points:
         return None
     best_date, best_price = min(points, key=lambda p: p[1])
     if best_date == chosen:
         return None
-    return (
-        f"📅 Гибкие даты: дешевле всего *{fmt_date(best_date)}* — "
-        f"{format_money(best_price)}."
-    )
+    return t(lang, "flex_line", d=fmt_date(lang, best_date), m=money(lang, best_price))
 
 
 # --- range / hot / tracking ------------------------------------------------
 
-
-def range_text(origin: str, destination: str, points: Sequence[Tuple[_dt.date, int]],
-               pax: Passengers) -> str:
+def range_text(lang: str, origin: str, destination: str,
+               points: Sequence[Tuple[_dt.date, int]], pax: pricing.Passengers) -> str:
     if not points:
-        return no_results_text(False)
+        return no_results_text(lang, False)
     cheapest = min(points, key=lambda p: p[1])
     start, end = points[0][0], points[-1][0]
-    lines = [f"📅 {origin} → {destination}, {fmt_date(start)} — {fmt_date(end)} · {pax.summary}:", ""]
+    lines = [t(lang, "range_title", o=origin, d=destination,
+               start=fmt_date(lang, start), end=fmt_date(lang, end), pax=pax_summary(lang, pax)), ""]
     for date, price in points:
-        mark = " 👑 самый дешёвый" if (date, price) == cheapest else ""
-        lines.append(f"{fmt_date(date)}: *{format_money(price)}*{mark}")
+        mark = f" 👑 {t(lang, 'mark_cheapest')}" if (date, price) == cheapest else ""
+        lines.append(f"{fmt_date(lang, date)}: *{money(lang, price)}*{mark}")
     lines.append("")
-    lines.append(f"Дешевле всего — *{fmt_date(cheapest[0])}* за *{format_money(cheapest[1])}*.")
+    lines.append(t(lang, "cheapest_day", d=fmt_date(lang, cheapest[0]), m=money(lang, cheapest[1])))
     return "\n".join(lines)
 
 
-def hot_text(deals: Sequence[Priced]) -> str:
+def hot_text(lang: str, deals: Sequence[Priced]) -> str:
     if not deals:
-        return "Сейчас нет заметных скидок — загляните позже. 🙂"
-    lines = ["🔥 *Горящие билеты* (макс. скидка сейчас):", ""]
+        return t(lang, "hot_none")
+    lines = [t(lang, "hot_title"), ""]
     for p in deals:
         it = p.itinerary
-        lines.append(
-            f"• {it.origin} → {it.destination} {fmt_date(it.dep.date())}: "
-            f"*{format_money(p.price_total)}* (−{p.discount_pct}%, {it.airline})"
-        )
+        lines.append(f"• {it.origin} → {it.destination} {fmt_date(lang, it.dep.date())}: "
+                     f"*{money(lang, p.price_total)}* (−{p.discount_pct}%, {it.airline})")
     return "\n".join(lines)
 
 
-def track_added_text(origin: str, destination: str, date: _dt.date, pax: Passengers, price: int) -> str:
-    return (
-        "👀 Отслеживаю цену:\n"
-        f"📍 {origin} → {destination}, {fmt_date(date)} · {pax.summary}\n"
-        f"💰 Сейчас: *{format_money(price)}*\n\n"
-        "Сообщу, как только цена упадёт. /mytracks — список."
-    )
+def track_added_text(lang: str, origin: str, destination: str, date: _dt.date,
+                     pax: pricing.Passengers, price: int) -> str:
+    return t(lang, "track_added", o=origin, d=destination, date=fmt_date(lang, date),
+             pax=pax_summary(lang, pax), m=money(lang, price))
 
 
-def drop_text(origin: str, destination: str, date: _dt.date, previous: int, new: int, pct: int) -> str:
-    return (
-        f"🔥 Цена упала! {origin} → {destination}, {fmt_date(date)}\n"
-        f"Было {format_money(previous)} → стало *{format_money(new)}* (−{pct}%)."
-    )
+def drop_text(lang: str, origin: str, destination: str, date: _dt.date,
+              previous: int, new: int, pct: int) -> str:
+    return t(lang, "drop", o=origin, d=destination, date=fmt_date(lang, date),
+             prev=money(lang, previous), new=money(lang, new), pct=pct)
 
 
-def mytracks_text(tracks) -> str:
+def mytracks_text(lang: str, tracks) -> str:
     if not tracks:
-        return "У вас нет отслеживаний. Нажмите «➕👀 Добавить отслеживание» после поиска."
-    lines = ["👀 *Ваши отслеживания:*", ""]
-    for i, t in enumerate(tracks, start=1):
-        last = format_money(t.last_price) if t.last_price is not None else "—"
-        best = format_money(t.best_price) if t.best_price is not None else "—"
+        return t(lang, "mytracks_empty")
+    lines = [t(lang, "mytracks_title"), ""]
+    for i, tr in enumerate(tracks, start=1):
+        last = money(lang, tr.last_price) if tr.last_price is not None else "—"
+        best = money(lang, tr.best_price) if tr.best_price is not None else "—"
         lines.append(
-            f"{i}. {t.origin} → {t.destination}, {fmt_date(t.date)} · {t.pax.summary}"
-            f" — сейчас {last}, мин. {best} ({len(t.history)} пров.)"
+            f"{i}. {tr.origin} → {tr.destination}, {fmt_date(lang, tr.date)} · {pax_summary(lang, tr.pax)}"
+            f" — {t(lang, 'tr_now')} {last}, {t(lang, 'tr_min')} {best} ({len(tr.history)} {t(lang, 'tr_checks')})"
         )
     return "\n".join(lines)

@@ -23,6 +23,7 @@ class Track:
     destination: str
     date: _dt.date
     pax: Passengers
+    lang: str = "ru"
     history: List[Tuple[int, int]] = field(default_factory=list)  # (tick, price)
 
     @property
@@ -62,10 +63,12 @@ class PriceTracker:
         self._tracks: Dict[int, Dict[str, Track]] = {}
 
     def add(self, chat_id: int, origin: str, destination: str, date: _dt.date,
-            pax: Optional[Passengers] = None, tick: Optional[int] = None) -> Tuple[Track, Optional[int]]:
-        track = Track(chat_id, origin, destination, date, pax or Passengers())
+            pax: Optional[Passengers] = None, tick: Optional[int] = None,
+            lang: str = "ru") -> Tuple[Track, Optional[int]]:
+        track = Track(chat_id, origin, destination, date, pax or Passengers(), lang)
         chat = self._tracks.setdefault(chat_id, {})
         track = chat.setdefault(track.key, track)
+        track.lang = lang
 
         price = self._service.cheapest_price(origin, destination, date, pax=track.pax, tick=tick)
         if price is not None:
