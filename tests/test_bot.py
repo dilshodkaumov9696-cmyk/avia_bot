@@ -75,7 +75,7 @@ def test_pax_increment_and_go():
     u, q = _cb_update("px:a:+")
     assert asyncio.run(bot.pax_cb(u, context)) == bot.PAX
     assert context.user_data["draft"]["pax"].adults == 2
-    q.edit_message_reply_markup.assert_awaited()
+    q.edit_message_text.assert_awaited()
 
     u2, q2 = _cb_update("px:go")
     assert asyncio.run(bot.pax_cb(u2, context)) == bot.DATES

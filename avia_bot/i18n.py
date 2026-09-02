@@ -50,10 +50,17 @@ def currency_of(lang: str) -> str:
     return CURRENCY.get(normalize(lang), "TJS")
 
 
+SYMBOLS = {
+    "RUB": "₽", "USD": "$", "TJS": "TJS", "UZS": "soʻm", "KGS": "сом",
+    "KZT": "₸", "TMT": "TMT", "AZN": "₼", "BYN": "Br",
+}
+
+
 def money(lang: str, tjs_amount: int) -> str:
     cur = currency_of(lang)
     amount = int(round(tjs_amount * FX.get(cur, 1.0)))
-    return f"{amount:,}".replace(",", "\u00a0") + f" {cur}"
+    pretty = f"{amount:,}".replace(",", "\u00a0")
+    return f"{pretty} {SYMBOLS.get(cur, cur)}"
 
 
 # --- dates -----------------------------------------------------------------
@@ -77,37 +84,54 @@ def fmt_dt(lang: str, value: _dt.datetime) -> str:
     return f"{fmt_date(lang, value.date())} {value:%H:%M}"
 
 
+_RU_MONTHS_SHORT = ["", "янв", "фев", "мар", "апр", "мая", "июн",
+                    "июл", "авг", "сен", "окт", "ноя", "дек"]
+_RU_WDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+_EN_WDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def fmt_date_short(lang: str, date: _dt.date) -> str:
+    lang = normalize(lang)
+    if lang == "en":
+        return f"{_EN_WDAYS[date.weekday()]}, {date.day} {_EN_MONTHS[date.month]}"
+    return f"{_RU_WDAYS[date.weekday()]}, {date.day} {_RU_MONTHS_SHORT[date.month]}"
+
+
+def fmt_time(value: _dt.datetime) -> str:
+    return f"{value:%H:%M}"
+
+
 # --- string catalog --------------------------------------------------------
 # Each key maps lang -> template. Missing langs fall back to "ru", then the key.
 
 STRINGS: Dict[str, Dict[str, str]] = {
     "welcome": {
-        "ru": "✈️ *AviaBot* — поиск и отслеживание авиабилетов.\nНажмите 🔎 Поиск, чтобы начать, или /help.",
-        "tg": "✈️ *AviaBot* — ҷустуҷӯ ва пайгирии чиптаҳои ҳавопаймо.\nБарои оғоз 🔎 Ҷустуҷӯ-ро пахш кунед ё /help.",
-        "uz": "✈️ *AviaBot* — aviachiptalarni qidirish va kuzatish.\nBoshlash uchun 🔎 Qidiruv tugmasini bosing yoki /help.",
-        "ky": "✈️ *AviaBot* — авиабилеттерди издөө жана байкоо.\nБаштоо үчүн 🔎 Издөө басыңыз же /help.",
-        "kk": "✈️ *AviaBot* — авиабилеттерді іздеу және бақылау.\nБастау үшін 🔎 Іздеу түймесін басыңыз немесе /help.",
-        "tk": "✈️ *AviaBot* — awiabiletleri gözlemek we yzarlamak.\nBaşlamak üçin 🔎 Gözleg basyň ýa-da /help.",
-        "az": "✈️ *AviaBot* — aviabiletlərin axtarışı və izlənməsi.\nBaşlamaq üçün 🔎 Axtarış düyməsini basın və ya /help.",
-        "be": "✈️ *AviaBot* — пошук і адсочванне авіябілетаў.\nНацісніце 🔎 Пошук, каб пачаць, або /help.",
-        "en": "✈️ *AviaBot* — flight search & price tracking.\nTap 🔎 Search to begin, or /help.",
+        "ru": "AviaBot\nБилеты и цены — коротко и по делу.\n\nВыберите, что нужно ↓",
+        "tg": "AviaBot\nЧиптаҳо ва нархҳо — кӯтоҳ ва равшан.\n\nИнтихоб кунед ↓",
+        "uz": "AviaBot\nChiptalar va narxlar — qisqa va tushunarli.\n\nKeragini tanlang ↓",
+        "ky": "AviaBot\nБилеттер жана баалар.\n\nТандаңыз ↓",
+        "kk": "AviaBot\nБилеттер мен бағалар.\n\nТаңдаңыз ↓",
+        "tk": "AviaBot\nBiletler we bahalar.\n\nSaýlaň ↓",
+        "az": "AviaBot\nBiletlər və qiymətlər.\n\nSeçin ↓",
+        "be": "AviaBot\nКвіткі і цэны — коратка.\n\nАбярыце ↓",
+        "en": "AviaBot\nFlights and fares, without the noise.\n\nPick what you need ↓",
     },
     "help": {
-        "ru": "🔎 Поиск — пошагово. 🔎🗓 По диапазону — дешёвый день. 👀 Отслеживание цены. 🔥 /hot. 🗂 /mytracks. 🌐 /language.",
-        "en": "🔎 Search — step by step. 🔎🗓 Range — cheapest day. 👀 Price tracking. 🔥 /hot. 🗂 /mytracks. 🌐 /language.",
-        "uz": "🔎 Qidiruv — bosqichma-bosqich. 🔎🗓 Diapazon — arzon kun. 👀 Narx kuzatuvi. 🔥 /hot. 🗂 /mytracks. 🌐 /language.",
-        "tg": "🔎 Ҷустуҷӯ — қадам ба қадам. 🔎🗓 Фосила — рӯзи арзон. 👀 Пайгирии нарх. 🔥 /hot. 🗂 /mytracks. 🌐 /language.",
+        "ru": "Найти билеты — пошаговый поиск.\nКуда улететь дешево — идеи направлений.\nКалендарь цен — лучший день месяца.\nМои алерты — падение цены.\nКабинет — язык, валюта, история.\n\nГород, страну, аэропорт или код (LED) можно вводить как есть.",
+        "en": "Find tickets — guided search.\nWhere to fly cheap — destination ideas.\nPrice calendar — best day of the month.\nAlerts — price drops.\nCabinet — language, currency, history.\n\nType a city, country, airport or code (LED).",
+        "uz": "Chipta qidirish — bosqichma-bosqich.\nArzon yoʻnalishlar — gʻoyalar.\nNarx kalendari — oyning eng arzon kuni.\nAlertlar — narx tushishi.\nKabinet — til, valyuta, tarix.",
+        "tg": "Ҷустуҷӯи чипта — қадам ба қадам.\nСафарҳои арзон — ғояҳо.\nТақвими нарх — рӯзи арзон.\nОгоҳӣ — паст шудани нарх.\nКабинет — забон, асъор, таърих.",
     },
     "ask_from": {
-        "ru": "🏠 Введите город откуда летите (Пример: Москва)",
-        "tg": "🏠 Шаҳри парвозро ворид кунед (Мисол: Москва)",
-        "uz": "🏠 Uchib chiqadigan shaharni kiriting (Masalan: Moskva)",
-        "ky": "🏠 Учуп чыккан шаарды жазыңыз (Мисалы: Москва)",
-        "kk": "🏠 Ұшатын қаланы енгізіңіз (Мысалы: Мәскеу)",
-        "tk": "🏠 Ugraýan şäheriňizi ýazyň (Mysal: Moskwa)",
-        "az": "🏠 Uçduğunuz şəhəri yazın (Məsələn: Moskva)",
-        "be": "🏠 Увядзіце горад адкуль ляціце (Прыклад: Масква)",
-        "en": "🏠 Enter departure city (e.g. Moscow)",
+        "ru": "Откуда летите?\nГород, страна, аэропорт или код — например Москва, Россия, Шереметьево, SVO",
+        "tg": "Аз куҷо парвоз?\nШаҳр, кишвар, фурудгоҳ ё код — масалан Москва, SVO",
+        "uz": "Qayerdan uchasiz?\nShahar, mamlakat, aeroport yoki kod — masalan Moskva, SVO",
+        "en": "Where from?\nCity, country, airport or code — e.g. Moscow, Russia, Sheremetyevo, SVO",
+        "ky": "Кайдан учасыз? Шаар, өлкө же код (SVO).",
+        "kk": "Қайдан ұшасыз? Қала, ел немесе код (SVO).",
+        "tk": "Nireden? Şäher, ýurt ýa-da kod (SVO).",
+        "az": "Haradan? Şəhər, ölkə və ya kod (SVO).",
+        "be": "Адкуль ляціце? Горад, краіна або код (SVO).",
     },
     "choose_from": {
         "ru": "Выберите из списка откуда отправляетесь",
@@ -121,15 +145,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Choose your departure from the list",
     },
     "ask_to": {
-        "ru": "🛫 Введите город куда вы летите (Пример: Худжанд)",
-        "tg": "🛫 Шаҳри мақсадро ворид кунед (Мисол: Хуҷанд)",
-        "uz": "🛫 Qayerga uchishingizni kiriting (Masalan: Xoʻjand)",
-        "ky": "🛫 Кайда учаарыңызды жазыңыз (Мисалы: Хужанд)",
-        "kk": "🛫 Қайда ұшатыныңызды енгізіңіз (Мысалы: Хожанд)",
-        "tk": "🛫 Nirä barýanyňyzy ýazyň (Mysal: Hojent)",
-        "az": "🛫 Hara uçduğunuzu yazın (Məsələn: Xocənd)",
-        "be": "🛫 Увядзіце горад куды ляціце (Прыклад: Худжанд)",
-        "en": "🛫 Enter destination city (e.g. Khujand)",
+        "ru": "Куда летите?\nТоже город, страна, аэропорт или код",
+        "tg": "Ба куҷо парвоз?",
+        "uz": "Qayerga uchasiz?",
+        "en": "Where to?\nCity, country, airport or code",
+        "ky": "Кайда учасыз?", "kk": "Қайда ұшасыз?", "tk": "Nirä?",
+        "az": "Hara?", "be": "Куды ляціце?",
     },
     "choose_to": {
         "ru": "Выберите из списка куда летите",
@@ -138,21 +159,21 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Choose your destination from the list",
     },
     "city_not_found": {
-        "ru": "Не нашёл такой город. Попробуйте ещё раз (например: Москва, Ташкент).",
-        "uz": "Bunday shahar topilmadi. Qayta urinib koʻring (masalan: Moskva, Toshkent).",
-        "tg": "Чунин шаҳр ёфт нашуд. Аз нав кӯшиш кунед (масалан: Москва, Тошканд).",
-        "en": "City not found. Try again (e.g. Moscow, Tashkent).",
+        "ru": "Ничего не нашёл. Попробуйте иначе: Москва, Турция, Хитроу или LED.",
+        "uz": "Topilmadi. Moskva, Turkiya, Heathrow yoki LED deb yozing.",
+        "tg": "Ёфт нашуд. Москва, Туркия, LED-ро кӯшиш кунед.",
+        "en": "Nothing found. Try a city, country, airport name or code (LED).",
     },
     "pax_prompt": {
-        "ru": "Выберите кол-во пассажиров и класс",
-        "tg": "Шумораи мусофирон ва синфро интихоб кунед",
-        "uz": "Yoʻlovchilar sonini va sinfni tanlang",
-        "ky": "Жүргүнчүлөрдүн санын жана классын тандаңыз",
-        "kk": "Жолаушылар санын және сыныпты таңдаңыз",
-        "tk": "Ýolagçy sanyny we synpy saýlaň",
-        "az": "Sərnişin sayını və sinfi seçin",
-        "be": "Выберыце колькасць пасажыраў і клас",
-        "en": "Choose passengers and cabin class",
+        "ru": "Пассажиры и класс",
+        "tg": "Мусофирон ва синф",
+        "uz": "Yoʻlovchilar va sinf",
+        "ky": "Жүргүнчүлөр жана класс",
+        "kk": "Жолаушылар және сынып",
+        "tk": "Ýolagçylar we synp",
+        "az": "Sərnişinlər və sinif",
+        "be": "Пасажыры і клас",
+        "en": "Passengers and cabin",
     },
     "adults": {"ru": "Взрослые", "uz": "Kattalar", "tg": "Калонсолон", "ky": "Чоңдор",
                "kk": "Ересектер", "tk": "Ulular", "az": "Böyüklər", "be": "Дарослыя", "en": "Adults"},
@@ -168,27 +189,24 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "ab_child": {"ru": "дет.", "uz": "bol.", "tg": "кӯд.", "en": "ch."},
     "ab_infant": {"ru": "млад.", "uz": "chaq.", "tg": "навз.", "en": "inf."},
     "dates_hint": {
-        "ru": "🗓 Выберите день вылета и обратно (если нужно).",
-        "uz": "🗓 Uchish va (kerak boʻlsa) qaytish kunini tanlang.",
-        "tg": "🗓 Рӯзи парвоз ва бозгаштро (агар лозим) интихоб кунед.",
-        "en": "🗓 Pick the outbound and (optional) return date.",
+        "ru": "Дата вылета",
+        "uz": "Uchish sanasi",
+        "tg": "Санаи парвоз",
+        "en": "Departure date",
     },
-    "label_depart": {"ru": "🚀 Вылет", "uz": "🚀 Uchish", "tg": "🚀 Парвоз", "en": "🚀 Depart"},
-    "label_return": {"ru": "🔄 Обратно", "uz": "🔄 Qaytish", "tg": "🔄 Бозгашт", "en": "🔄 Return"},
+    "label_depart": {"ru": "Туда", "uz": "Borish", "tg": "Рафтан", "en": "Outbound"},
+    "label_return": {"ru": "Обратно", "uz": "Qaytish", "tg": "Бозгашт", "en": "Return"},
     "searching": {
         "ru": "Ищу на {p}…", "uz": "{p} da qidiryapman…", "tg": "Дар {p} меҷӯям…",
         "en": "Searching {p}…",
     },
-    "tag_fastest": {"ru": "🔴 Самый быстрый 🏎", "uz": "🔴 Eng tez 🏎", "tg": "🔴 Тезтарин 🏎",
-                    "en": "🔴 Fastest 🏎"},
-    "tag_cheapest": {"ru": "🟢 Самый дешёвый 💸", "uz": "🟢 Eng arzon 💸", "tg": "🟢 Арзонтарин 💸",
-                     "en": "🟢 Cheapest 💸"},
+    "tag_fastest": {"ru": "самый быстрый", "uz": "eng tez", "tg": "тезтарин",
+                    "en": "fastest"},
+    "tag_cheapest": {"ru": "самый дешёвый", "uz": "eng arzon", "tg": "арзонтарин",
+                     "en": "cheapest"},
     "direct": {"ru": "Прямой", "uz": "Toʻgʻridan-toʻgʻri", "tg": "Мустақим", "ky": "Түз",
                "kk": "Тікелей", "tk": "Göni", "az": "Birbaşa", "be": "Прамы", "en": "Direct"},
-    "transfers": {  # {n} {info}
-        "ru": "🔀 {n} пересадка: {info}", "uz": "🔀 {n} transfer: {info}",
-        "tg": "🔀 {n} истгоҳ: {info}", "en": "🔀 {n} stop(s): {info}",
-    },
+    "stops_n": {"ru": "{n} пересадка", "uz": "{n} transfer", "tg": "{n} истгоҳ", "en": "{n} stop(s)"},
     "bag_yes": {"ru": "🧳 С багажом", "uz": "🧳 Bagaj bilan", "tg": "🧳 Бо бор", "en": "🧳 With baggage"},
     "bag_no": {"ru": "🎒 Без багажа", "uz": "🎒 Bagajsiz", "tg": "🎒 Бе бор", "en": "🎒 No baggage"},
     "leg_there": {"ru": "— Туда:", "uz": "— Boradigan:", "tg": "— Рафтан:", "en": "— Outbound:"},
@@ -196,29 +214,41 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "btn_done": {"ru": "✅ Готово", "uz": "✅ Tayyor", "tg": "✅ Тайёр", "en": "✅ Done"},
     "btn_go": {"ru": "✅ Далее", "uz": "✅ Keyingi", "tg": "✅ Оянда", "ky": "✅ Кийинки",
                "kk": "✅ Келесі", "tk": "✅ Indiki", "az": "✅ Növbəti", "be": "✅ Далей", "en": "✅ Next"},
-    "btn_buy": {"ru": "Купить билет", "uz": "Chipta sotib olish", "tg": "Харидани чипта",
-                "ky": "Билет сатып алуу", "kk": "Билет сатып алу", "tk": "Bilet satyn al",
-                "az": "Bilet al", "be": "Купіць білет", "en": "Buy ticket"},
+    "btn_buy": {"ru": "Забронировать", "uz": "Bron qilish", "tg": "Брон кардан",
+                "ky": "Брондоо", "kk": "Брондау", "tk": "Bron et",
+                "az": "Rezerv", "be": "Забраніраваць", "en": "Book"},
     "seats_left": {"ru": "Осталось", "uz": "Qoldi", "tg": "Боқӣ монд", "en": "Left"},
     "btn_filters": {"ru": "⚙️ Фильтры", "uz": "⚙️ Filtrlar", "tg": "⚙️ Филтрҳо", "en": "⚙️ Filters"},
     "btn_refresh": {"ru": "🔄 Обновить", "uz": "🔄 Yangilash", "tg": "🔄 Навсозӣ", "en": "🔄 Refresh"},
     "btn_flex": {"ru": "🗓 ±3 дня", "uz": "🗓 ±3 kun", "tg": "🗓 ±3 рӯз", "en": "🗓 ±3 days"},
-    "btn_track": {"ru": "➕👀 Отслеживать цену", "uz": "➕👀 Narxni kuzatish", "tg": "➕👀 Пайгирии нарх",
-                  "en": "➕👀 Track price"},
+    "btn_track": {"ru": "Отслеживать", "uz": "Kuzatish", "tg": "Пайгирӣ",
+                  "en": "Track"},
+    "btn_new_search": {"ru": "Новый поиск", "uz": "Yangi qidiruv", "tg": "Ҷустуҷӯи нав",
+                       "en": "New search"},
     "flt_direct": {"ru": "Только прямые", "uz": "Faqat toʻgʻri", "tg": "Танҳо мустақим", "en": "Direct only"},
     "flt_bag": {"ru": "С багажом", "uz": "Bagaj bilan", "tg": "Бо бор", "en": "With baggage"},
     "flt_apply": {"ru": "Применить", "uz": "Qoʻllash", "tg": "Татбиқ", "en": "Apply"},
     "flt_reset": {"ru": "Сбросить", "uz": "Tozalash", "tg": "Тоза кардан", "en": "Reset"},
     "flt_title": {"ru": "⚙️ Фильтры поиска:", "uz": "⚙️ Qidiruv filtrlari:", "tg": "⚙️ Филтрҳои ҷустуҷӯ:",
                   "en": "⚙️ Search filters:"},
-    "kb_search": {"ru": "🔎 Поиск", "uz": "🔎 Qidiruv", "tg": "🔎 Ҷустуҷӯ", "ky": "🔎 Издөө",
-                  "kk": "🔎 Іздеу", "tk": "🔎 Gözleg", "az": "🔎 Axtarış", "be": "🔎 Пошук", "en": "🔎 Search"},
-    "kb_range": {"ru": "🔎🗓 По диапазону", "uz": "🔎🗓 Diapazon boʻyicha", "tg": "🔎🗓 Аз рӯи фосила",
-                 "en": "🔎🗓 By date range"},
-    "kb_track": {"ru": "➕👀 Добавить отслеживание", "uz": "➕👀 Kuzatuv qoʻshish",
-                 "tg": "➕👀 Илова кардани пайгирӣ", "en": "➕👀 Add tracking"},
-    "kb_lang": {"ru": "🌐 Язык", "uz": "🌐 Til", "tg": "🌐 Забон", "ky": "🌐 Тил", "kk": "🌐 Тіл",
-                "tk": "🌐 Dil", "az": "🌐 Dil", "be": "🌐 Мова", "en": "🌐 Language"},
+    "kb_search": {"ru": "Найти билеты", "uz": "Chipta qidirish", "tg": "Ҷустуҷӯи чипта",
+                  "ky": "Билет издөө", "kk": "Билет іздеу", "tk": "Bilet gözle",
+                  "az": "Bilet axtar", "be": "Знайсці квіткі", "en": "Find tickets"},
+    "kb_discover": {"ru": "Куда улететь дешево", "uz": "Arzon yoʻnalishlar",
+                    "tg": "Сафарҳои арзон", "en": "Where to fly cheap"},
+    "kb_alerts": {"ru": "Мои алерты", "uz": "Alertlarim", "tg": "Огоҳиҳои ман",
+                  "en": "My alerts"},
+    "kb_calendar": {"ru": "Календарь цен", "uz": "Narx kalendari", "tg": "Тақвими нарх",
+                    "en": "Price calendar"},
+    "kb_cabinet": {"ru": "Кабинет", "uz": "Kabinet", "tg": "Кабинет", "en": "Account"},
+    "kb_premium": {"ru": "Подписка", "uz": "Obuna", "tg": "Обуна", "en": "Premium"},
+    "kb_lang": {"ru": "Язык", "uz": "Til", "tg": "Забон", "ky": "Тил", "kk": "Тіл",
+                "tk": "Dil", "az": "Dil", "be": "Мова", "en": "Language"},
+    "kb_help": {"ru": "Помощь", "uz": "Yordam", "tg": "Кӯмак", "en": "Help"},
+    "kb_range": {"ru": "Календарь цен", "uz": "Narx kalendari", "tg": "Тақвими нарх",
+                 "en": "Price calendar"},
+    "kb_track": {"ru": "Мои алерты", "uz": "Alertlarim", "tg": "Огоҳиҳои ман",
+                 "en": "My alerts"},
     "variant": {"ru": "Вариант {i} из {n}", "uz": "{i}-variant / {n}", "tg": "Вариант {i} аз {n}",
                 "en": "Option {i} of {n}"},
     "filters_label": {"ru": "⚙️ Фильтры: {f}", "uz": "⚙️ Filtrlar: {f}", "tg": "⚙️ Филтрҳо: {f}",
@@ -289,8 +319,38 @@ STRINGS: Dict[str, Dict[str, str]] = {
                            "en": "No flights for these filters. Relax them in «Filters»."},
     "pick_date_alert": {"ru": "Выберите дату вылета", "uz": "Uchish sanasini tanlang",
                         "tg": "Санаи парвозро интихоб кунед", "en": "Pick a departure date"},
-    "start_search_first": {"ru": "Сначала выполните поиск 🔎.", "uz": "Avval 🔎 qidiruvni bajaring.",
-                           "tg": "Аввал ҷустуҷӯ 🔎 кунед.", "en": "Do a search 🔎 first."},
+    "start_search_first": {"ru": "Сначала найдите билеты.", "uz": "Avval chipta qidiring.",
+                           "tg": "Аввал чипта ҷӯед.", "en": "Find tickets first."},
+    "pax_left": {"ru": "Можно добавить ещё {n}", "uz": "Yana {n} qoʻshish mumkin",
+                 "tg": "Боз {n} илова кунед", "en": "{n} more can be added"},
+    "pax_total": {"ru": "{n} из 9", "uz": "{n} / 9", "tg": "{n} аз 9", "en": "{n} of 9"},
+    "footnote_cache": {
+        "ru": "Цены ориентировочные — актуальные на сайте бронирования.",
+        "uz": "Narxlar taxminiy — aniq narx bron sahifasida.",
+        "tg": "Нархҳо тахминӣ — аслӣ дар сайти брон.",
+        "en": "Fares are indicative — confirm on the booking site.",
+    },
+    "discover_title": {"ru": "Куда сейчас дешевле", "uz": "Hozir qayer arzon",
+                       "tg": "Ҳозир куҷо арзонтар", "en": "Cheap destinations right now"},
+    "discover_need_from": {"ru": "Сначала укажите город вылета в поиске — тогда покажу, куда дешевле.",
+                           "en": "Set a departure city in search first — then I’ll show cheap destinations."},
+    "cabinet_title": {"ru": "Кабинет", "uz": "Kabinet", "tg": "Кабинет", "en": "Account"},
+    "cabinet_lang": {"ru": "Язык: {name}", "uz": "Til: {name}", "tg": "Забон: {name}", "en": "Language: {name}"},
+    "cabinet_cur": {"ru": "Валюта: {cur}", "uz": "Valyuta: {cur}", "tg": "Асъор: {cur}", "en": "Currency: {cur}"},
+    "premium_text": {
+        "ru": "Подписка\nБольше алертов, гибкие даты и приоритет в поиске.\nПока без оплаты — все функции открыты.",
+        "uz": "Obuna\nKoʻproq alert, mos sanalar. Hozircha barchasi ochiq.",
+        "tg": "Обуна\nОгоҳиҳои бештар. Ҳоло ҳама чиз кушода аст.",
+        "en": "Premium\nMore alerts, flexible dates, search priority.\nNothing to pay yet — everything is open.",
+    },
+    "route_from": {"ru": "Откуда: {s}", "uz": "Qayerdan: {s}", "tg": "Аз: {s}", "en": "From: {s}"},
+    "layover_in": {"ru": "пересадка {t} в {city}", "uz": "{city} da {t} transfer",
+                   "tg": "истгоҳ {t} дар {city}", "en": "{t} layover in {city}"},
+    "bag_yes": {"ru": "багаж", "uz": "bagaj", "tg": "бор", "en": "bags"},
+    "bag_no": {"ru": "без багажа", "uz": "bagajsiz", "tg": "бе бор", "en": "no bags"},
+    "direct": {"ru": "прямой", "uz": "toʻgʻri", "tg": "мустақим", "ky": "түз",
+               "kk": "тікелей", "tk": "göni", "az": "birbaşa", "be": "прямы", "en": "direct"},
+    "leg_back": {"ru": "обратно", "uz": "qaytish", "tg": "бозгашт", "en": "return"},
 }
 
 

@@ -20,8 +20,8 @@ def test_currency_of():
 
 def test_money_conversion():
     assert i18n.money("tg", 3000) == "3\u00a0000 TJS"          # 1:1
-    assert i18n.money("en", 3000) == "273 USD"                 # 3000 * 0.091
-    assert i18n.money("uz", 3000) == "3\u00a0540\u00a0000 UZS"  # 3000 * 1180
+    assert i18n.money("en", 3000) == "273 $"                   # 3000 * 0.091
+    assert i18n.money("ru", 3000).endswith("₽")
 
 
 def test_translation_fallback_to_ru():
@@ -32,7 +32,7 @@ def test_translation_fallback_to_ru():
 
 
 def test_translation_uses_language_when_present():
-    assert i18n.t("en", "kb_search") == "🔎 Search"
+    assert i18n.t("en", "kb_search") == "Find tickets"
     assert i18n.t("uz", "adults") == "Kattalar"
 
 

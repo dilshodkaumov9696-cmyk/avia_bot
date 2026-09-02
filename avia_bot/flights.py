@@ -18,17 +18,21 @@ from . import geo, pricing
 from .pricing import Passengers
 
 AIRLINES = [
-    "Уральские авиалинии", "S7 Airlines", "Аэрофлот", "Победа",
+    "S7 Airlines", "Аэрофлот", "Победа", "Уральские авиалинии",
     "Utair", "Turkish Airlines", "Somon Air", "Uzbekistan Airways",
+    "Emirates", "Qatar Airways", "Lufthansa", "Air France",
 ]
-# Candidate connection hubs (airport codes that exist in geo).
-HUBS = ["OVB", "TAS", "IST", "DXB", "LED", "KZN", "ALA"]
+HUBS = ["IST", "DXB", "DOH", "FRA", "AMS", "CDG", "LHR", "JFK",
+        "SIN", "LED", "TAS", "ALA", "SVO", "AUH", "DEL", "WAW"]
 
-# Metro-code routes we surface for hot deals / suggestions.
 POPULAR_ROUTES = [
     ("MOW", "LBD"), ("MOW", "DYU"), ("MOW", "TAS"), ("MOW", "IST"),
     ("LED", "TAS"), ("MOW", "DXB"), ("TAS", "IST"), ("MOW", "AER"),
+    ("MOW", "AYT"), ("MOW", "EVN"), ("MOW", "TBS"), ("MOW", "MSQ"),
 ]
+
+DISCOVER_DESTS = ["AYT", "DXB", "IST", "AER", "TAS", "LED", "EVN", "TBS",
+                  "ALA", "MSQ", "BKK", "HKT", "SSH", "HRG"]
 
 
 def fmt_duration(minutes: int) -> str:

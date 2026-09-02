@@ -47,12 +47,12 @@ def _run_lang(service, tracker, lang: str, charts_dir: Optional[str]) -> None:
 
     _p(f"[{lang}] Диапазон / Range")
     points = service.search_range(origin.code, dest.code, DEP, DEP + _dt.timedelta(days=6), pax=pax, tick=TICK)
-    _show(responses.range_text(lang, origin.city, dest.city, points, pax))
+    _show(responses.range_text(lang, origin.display_city, dest.display_city, points, pax))
 
     if charts_dir:
         os.makedirs(charts_dir, exist_ok=True)
         with open(os.path.join(charts_dir, f"range_{lang}.png"), "wb") as fh:
-            fh.write(charts.render_range_chart(origin.city, dest.city, points))
+            fh.write(charts.render_range_chart(origin.display_city, dest.display_city, points))
 
 
 def run(charts_dir: Optional[str] = None, langs=("ru", "uz", "en")) -> None:
@@ -62,6 +62,8 @@ def run(charts_dir: Optional[str] = None, langs=("ru", "uz", "en")) -> None:
     _p("Шаг 1–4. Города, пассажиры, дата (как в боте)")
     print("Откуда: Москва →", [a.code for a in geo.search_cities("Москва")])
     print("Куда:   Худжанд →", [a.code for a in geo.search_cities("Худжанд")])
+    print("IATA:   LED →", [a.code for a in geo.search_cities("LED")])
+    print("Страна: Япония →", [a.code for a in geo.search_cities("Япония")][:5])
     print("Пассажиры:", responses.pax_summary("ru", Passengers(2, 1, cabin="economy")))
     print("Дата:", responses.render_plain(responses.dates_prompt("ru", DEP, None)))
 

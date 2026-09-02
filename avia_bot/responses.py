@@ -1,8 +1,8 @@
 """Language-aware reply builders shared by the bot and the offline demo.
 
-Text is looked up per language via :mod:`avia_bot.i18n` (with Russian fallback)
-and prices are converted to the user's currency. Assembled strings use a tiny
-markup (*bold*, `code`) rendered to Telegram-safe HTML by :func:`render_html`.
+Ticket cards are designed as receipts: price first, then a monospace timeline,
+then one quiet meta line. Markup is ``*bold*`` / `` `code` ``, rendered to
+Telegram-safe HTML by :func:`render_html`.
 """
 
 from __future__ import annotations
@@ -12,10 +12,10 @@ import html as _html
 import re as _re
 from typing import Optional, Sequence, Tuple
 
-from . import i18n, pricing
+from . import geo, i18n, pricing
 from .flights import Filters, Priced, fmt_duration
 from .geo import Airport
-from .i18n import fmt_date, fmt_dt, money, t
+from .i18n import fmt_date, fmt_date_short, fmt_time, money, t
 
 _BOLD = _re.compile(r"\*(.+?)\*", _re.S)
 _CODE = _re.compile(r"`(.+?)`", _re.S)
@@ -45,8 +45,6 @@ def aviasales_url(origin: str, destination: str, out_date: _dt.date,
     return url + str(max(1, passengers))
 
 
-# --- prompts ---------------------------------------------------------------
-
 def welcome(lang: str) -> str:
     return t(lang, "welcome")
 
@@ -56,32 +54,32 @@ def help_text(lang: str) -> str:
 
 
 def route_line(origin: Airport, destination: Airport) -> str:
-    return f"📍 {origin.city} ({origin.code}) → {destination.city} ({destination.code})"
+    return f"{origin.display_city} → {destination.display_city}"
 
 
 def route_line_from(origin: Airport) -> str:
-    return f"📍 {origin.city} ({origin.code})"
+    return f"{origin.display_city} ({origin.code})"
 
 
-def dates_prompt(lang: str, dep: Optional[_dt.date], ret: Optional[_dt.date]) -> str:
-    dep_s = fmt_date(lang, dep) if dep else "─────"
-    ret_s = fmt_date(lang, ret) if ret else "─────"
-    return (t(lang, "dates_hint") + "\n"
-            + f"{t(lang, 'label_depart')}: {dep_s}\n"
-            + f"{t(lang, 'label_return')}: {ret_s}")
+def dates_prompt(lang: str, dep: Optional[_dt.date], ret: Optional[_dt.date],
+                 roundtrip: bool = False) -> str:
+    dep_s = fmt_date(lang, dep) if dep else "—"
+    lines = [f"*{t(lang, 'dates_hint')}*", "", f"{t(lang, 'label_depart')}    {dep_s}"]
+    if roundtrip:
+        ret_s = fmt_date(lang, ret) if ret else "—"
+        lines.append(f"{t(lang, 'label_return')}    {ret_s}")
+    return "\n".join(lines)
 
 
 _PROVIDERS = ["Nebo.Travel", "Superkassa", "Aviasales", "Kupibilet"]
 
 
 def searching_bar(lang: str, step: int, total: int = 4) -> str:
-    filled = "🟢" * step
-    empty = "⚪" * max(0, total - step)
+    filled = "●" * step
+    empty = "○" * max(0, total - step)
     provider = _PROVIDERS[min(step, len(_PROVIDERS)) - 1] if step else _PROVIDERS[0]
-    return f"{filled}{empty} " + t(lang, "searching", p=provider)
+    return f"{filled}{empty}  {t(lang, 'searching', p=provider)}"
 
-
-# --- passengers ------------------------------------------------------------
 
 def cabin_label(lang: str, cabin: str) -> str:
     return t(lang, "business" if cabin == "business" else "economy")
@@ -96,47 +94,80 @@ def pax_summary(lang: str, pax: pricing.Passengers) -> str:
     return ", ".join(parts) + f", {cabin_label(lang, pax.cabin)}"
 
 
-# --- result cards ----------------------------------------------------------
+def pax_card(lang: str, pax: pricing.Passengers) -> str:
+    used = pax.total
+    left = max(0, 9 - used)
+    return "\n".join([
+        f"*{t(lang, 'pax_prompt')}*",
+        "",
+        f"{t(lang, 'adults')}     {pax.adults}",
+        f"{t(lang, 'children')}         {pax.children}",
+        f"{t(lang, 'infants')}     {pax.infants}",
+        f"{cabin_label(lang, pax.cabin)}",
+        "",
+        t(lang, "pax_total", n=used),
+        t(lang, "pax_left", n=left),
+    ])
+
+
+def _city(code: str) -> str:
+    apt = geo.airport(code)
+    return apt.display_city if apt else code
+
+
+def _leg_timeline_lang(lang: str, it) -> str:
+    if it.is_direct:
+        o, d = it.origin, it.destination
+        top = f"{o}  {fmt_time(it.dep)}  ———  {it.duration_str}  ———  {fmt_time(it.arr)}  {d}"
+        return f"`{top}`\n{_city(o)} · {_city(d)}"
+    lines = []
+    for leg in it.legs:
+        lines.append(f"`{leg.from_code}  {fmt_time(leg.dep)}  →  {fmt_time(leg.arr)}  {leg.to_code}`")
+    bits = [t(lang, "layover_in", t=fmt_duration(lay), city=city) for city, lay in it.stop_infos()]
+    if bits:
+        lines.append(" · ".join(bits))
+    return "\n".join(lines)
+
 
 def offer_buy_label(lang: str, priced: Priced) -> str:
-    return f"{t(lang, 'btn_buy')} ({t(lang, 'seats_left')}: {priced.itinerary.seats_left})"
+    return f"{t(lang, 'btn_buy')} · {money(lang, priced.price_total)}"
 
 
-def format_offer(lang: str, priced: Priced) -> str:
+def format_offer(lang: str, priced: Priced, back: Optional[Priced] = None) -> str:
     it = priced.itinerary
-    lines = []
     tags = []
-    if priced.is_fastest:
-        tags.append(t(lang, "tag_fastest"))
     if priced.is_cheapest:
         tags.append(t(lang, "tag_cheapest"))
+    if priced.is_fastest:
+        tags.append(t(lang, "tag_fastest"))
+
+    lines = [f"*{money(lang, priced.price_total)}*"]
     if tags:
         lines.append(" · ".join(tags))
-
-    price = f"💰 *{money(lang, priced.price_total)}*"
-    if priced.discount_pct > 0:
-        price += f"   🔥 -{priced.discount_pct}%"
-    lines.append(price)
-    if priced.pax.total > 1:
-        lines.append(f"👥 {pax_summary(lang, priced.pax)} · " + t(lang, "per_adult", m=money(lang, priced.per_adult)))
-    lines.append(f"🛫 {it.airline}")
-    lines.append(t(lang, "bag_yes") if it.baggage else t(lang, "bag_no"))
     lines.append("")
-    lines.append(t(lang, "leg_there"))
-    lines.append(f"📅 {fmt_dt(lang, it.dep)} — {fmt_dt(lang, it.arr)}")
-    if it.is_direct:
-        lines.append(f"🕐 {it.duration_str} ➡️ {t(lang, 'direct')}")
-    else:
-        stops = it.stop_infos()
-        info = ", ".join(f"{city} {fmt_duration(lay)}" for city, lay in stops)
-        lines.append(t(lang, "transfers", n=len(stops), info=info))
-        lines.append(f"⏱ {it.duration_str}")
+    lines.append(_leg_timeline_lang(lang, it))
+    if back is not None:
+        lines.append("")
+        lines.append(t(lang, "leg_back"))
+        lines.append(_leg_timeline_lang(lang, back.itinerary))
+
+    stop_label = t(lang, "direct") if it.is_direct else t(lang, "stops_n", n=it.stops)
+    bag = t(lang, "bag_yes") if it.baggage else t(lang, "bag_no")
+    lines.append("")
+    lines.append(f"{it.airline}  ·  {stop_label}  ·  {bag}")
+    lines.append(fmt_date_short(lang, it.dep.date()))
+    if priced.pax.total > 1:
+        lines.append(pax_summary(lang, priced.pax))
+    lines.append("")
+    lines.append(t(lang, "footnote_cache"))
     return "\n".join(lines)
 
 
 def results_header(lang: str, origin: str, destination: str, date: _dt.date,
                    pax: pricing.Passengers, page: int, total_pages: int, filters: Filters) -> str:
-    head = f"📍 {origin} → {destination} · {fmt_date(lang, date)} · {pax_summary(lang, pax)}"
+    head = f"{origin} → {destination}  ·  {fmt_date_short(lang, date)}"
+    if pax.total > 1:
+        head += f"  ·  {pax_summary(lang, pax)}"
     if filters.active:
         flags = []
         if filters.direct_only:
@@ -144,7 +175,6 @@ def results_header(lang: str, origin: str, destination: str, date: _dt.date,
         if filters.with_baggage:
             flags.append(t(lang, "flt_bag").lower())
         head += "\n" + t(lang, "filters_label", f=", ".join(flags))
-    head += "\n" + t(lang, "variant", i=page + 1, n=total_pages)
     return head
 
 
@@ -169,19 +199,16 @@ def flexible_text(lang: str, points: Sequence[Tuple[_dt.date, int]], chosen: _dt
     return t(lang, "flex_line", d=fmt_date(lang, best_date), m=money(lang, best_price))
 
 
-# --- range / hot / tracking ------------------------------------------------
-
 def range_text(lang: str, origin: str, destination: str,
                points: Sequence[Tuple[_dt.date, int]], pax: pricing.Passengers) -> str:
     if not points:
         return no_results_text(lang, False)
     cheapest = min(points, key=lambda p: p[1])
     start, end = points[0][0], points[-1][0]
-    lines = [t(lang, "range_title", o=origin, d=destination,
-               start=fmt_date(lang, start), end=fmt_date(lang, end), pax=pax_summary(lang, pax)), ""]
+    lines = [f"*{t(lang, 'range_title', o=origin, d=destination, start=fmt_date(lang, start), end=fmt_date(lang, end), pax=pax_summary(lang, pax))}*", ""]
     for date, price in points:
-        mark = f" 👑 {t(lang, 'mark_cheapest')}" if (date, price) == cheapest else ""
-        lines.append(f"{fmt_date(lang, date)}: *{money(lang, price)}*{mark}")
+        mark = f"  · {t(lang, 'mark_cheapest')}" if (date, price) == cheapest else ""
+        lines.append(f"{fmt_date(lang, date)}    *{money(lang, price)}*{mark}")
     lines.append("")
     lines.append(t(lang, "cheapest_day", d=fmt_date(lang, cheapest[0]), m=money(lang, cheapest[1])))
     return "\n".join(lines)
@@ -190,12 +217,35 @@ def range_text(lang: str, origin: str, destination: str,
 def hot_text(lang: str, deals: Sequence[Priced]) -> str:
     if not deals:
         return t(lang, "hot_none")
-    lines = [t(lang, "hot_title"), ""]
+    lines = [f"*{t(lang, 'discover_title')}*", ""]
     for p in deals:
         it = p.itinerary
-        lines.append(f"• {it.origin} → {it.destination} {fmt_date(lang, it.dep.date())}: "
-                     f"*{money(lang, p.price_total)}* (−{p.discount_pct}%, {it.airline})")
+        lines.append(
+            f"{_city(it.origin)} → {_city(it.destination)}"
+            f"    *{money(lang, p.price_total)}*"
+            + (f"  −{p.discount_pct}%" if p.discount_pct > 0 else "")
+        )
     return "\n".join(lines)
+
+
+def discover_text(lang: str, origin_city: str, deals: Sequence[Priced]) -> str:
+    if not deals:
+        return t(lang, "hot_none")
+    lines = [f"*{t(lang, 'discover_title')}*", origin_city, ""]
+    for p in deals:
+        it = p.itinerary
+        lines.append(f"{_city(it.destination)}    *{money(lang, p.price_total)}*")
+    return "\n".join(lines)
+
+
+def cabinet_text(lang: str, tracks_n: int) -> str:
+    return "\n".join([
+        f"*{t(lang, 'cabinet_title')}*",
+        "",
+        t(lang, "cabinet_lang", name=i18n.language_label(lang)),
+        t(lang, "cabinet_cur", cur=i18n.currency_of(lang)),
+        t(lang, "mytracks_title") + f" {tracks_n}",
+    ])
 
 
 def track_added_text(lang: str, origin: str, destination: str, date: _dt.date,
@@ -213,12 +263,16 @@ def drop_text(lang: str, origin: str, destination: str, date: _dt.date,
 def mytracks_text(lang: str, tracks) -> str:
     if not tracks:
         return t(lang, "mytracks_empty")
-    lines = [t(lang, "mytracks_title"), ""]
+    lines = [f"*{t(lang, 'mytracks_title')}*", ""]
     for i, tr in enumerate(tracks, start=1):
         last = money(lang, tr.last_price) if tr.last_price is not None else "—"
         best = money(lang, tr.best_price) if tr.best_price is not None else "—"
         lines.append(
-            f"{i}. {tr.origin} → {tr.destination}, {fmt_date(lang, tr.date)} · {pax_summary(lang, tr.pax)}"
-            f" — {t(lang, 'tr_now')} {last}, {t(lang, 'tr_min')} {best} ({len(tr.history)} {t(lang, 'tr_checks')})"
+            f"{i}. {tr.origin} → {tr.destination}, {fmt_date(lang, tr.date)}"
+            f" — {last}  ({t(lang, 'tr_min')} {best})"
         )
     return "\n".join(lines)
+
+
+def premium_text(lang: str) -> str:
+    return t(lang, "premium_text")

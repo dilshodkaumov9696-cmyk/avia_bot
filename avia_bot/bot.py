@@ -19,6 +19,7 @@ import re
 from typing import Optional
 
 from telegram import (
+    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputFile,
@@ -68,9 +69,12 @@ def _any_lang_regex(key: str) -> str:
 
 def _main_kb(lang: str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        [[KeyboardButton(t(lang, "kb_search"))],
-         [KeyboardButton(t(lang, "kb_range")), KeyboardButton(t(lang, "kb_track"))],
-         [KeyboardButton(t(lang, "kb_lang"))]],
+        [
+            [KeyboardButton(t(lang, "kb_search")), KeyboardButton(t(lang, "kb_discover"))],
+            [KeyboardButton(t(lang, "kb_alerts")), KeyboardButton(t(lang, "kb_calendar"))],
+            [KeyboardButton(t(lang, "kb_cabinet")), KeyboardButton(t(lang, "kb_premium"))],
+            [KeyboardButton(t(lang, "kb_lang")), KeyboardButton(t(lang, "kb_help"))],
+        ],
         resize_keyboard=True,
     )
 
@@ -96,23 +100,23 @@ def _city_kb(options, prefix: str) -> InlineKeyboardMarkup:
 def _pax_kb(lang: str, pax: Passengers) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("−", callback_data="px:a:-"),
-         InlineKeyboardButton(f"{t(lang, 'adults')}: {pax.adults}", callback_data="px:x"),
+         InlineKeyboardButton(f"{t(lang, 'adults')}  {pax.adults}", callback_data="px:x"),
          InlineKeyboardButton("+", callback_data="px:a:+")],
         [InlineKeyboardButton("−", callback_data="px:c:-"),
-         InlineKeyboardButton(f"{t(lang, 'children')}: {pax.children}", callback_data="px:x"),
+         InlineKeyboardButton(f"{t(lang, 'children')}  {pax.children}", callback_data="px:x"),
          InlineKeyboardButton("+", callback_data="px:c:+")],
         [InlineKeyboardButton("−", callback_data="px:i:-"),
-         InlineKeyboardButton(f"{t(lang, 'infants')}: {pax.infants}", callback_data="px:x"),
+         InlineKeyboardButton(f"{t(lang, 'infants')}  {pax.infants}", callback_data="px:x"),
          InlineKeyboardButton("+", callback_data="px:i:+")],
-        [InlineKeyboardButton("◀️", callback_data="px:cab:-"),
-         InlineKeyboardButton(f"💺 {responses.cabin_label(lang, pax.cabin)}", callback_data="px:x"),
-         InlineKeyboardButton("▶️", callback_data="px:cab:+")],
+        [InlineKeyboardButton("‹", callback_data="px:cab:-"),
+         InlineKeyboardButton(responses.cabin_label(lang, pax.cabin), callback_data="px:x"),
+         InlineKeyboardButton("›", callback_data="px:cab:+")],
         [InlineKeyboardButton(t(lang, "btn_go"), callback_data="px:go")],
     ])
 
 
-def _calendar_kb(year: int, month: int, selected) -> InlineKeyboardMarkup:
-    rows = calendar_ui.build_calendar(year, month, selected)
+def _calendar_kb(year: int, month: int, selected, roundtrip: bool = False) -> InlineKeyboardMarkup:
+    rows = calendar_ui.build_calendar(year, month, selected, roundtrip=roundtrip)
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(text, callback_data=data) for text, data in row] for row in rows]
     )
@@ -123,15 +127,16 @@ def _results_kb(lang: str, search: dict) -> InlineKeyboardMarkup:
     offer = results[page]
     buy_url = responses.aviasales_url(search["o_code"], search["d_code"], search["dep"],
                                       back_date=search.get("ret"), passengers=max(1, pax.adults + pax.children))
+    n = len(results)
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("‹", callback_data="res:prev"),
+         InlineKeyboardButton(f"{page + 1} / {n}", callback_data="res:x"),
+         InlineKeyboardButton("›", callback_data="res:next")],
         [InlineKeyboardButton(responses.offer_buy_label(lang, offer), url=buy_url)],
-        [InlineKeyboardButton("«", callback_data="res:prev"),
-         InlineKeyboardButton(f"{page + 1} / {len(results)}", callback_data="res:x"),
-         InlineKeyboardButton("»", callback_data="res:next")],
+        [InlineKeyboardButton(t(lang, "btn_track"), callback_data="res:track"),
+         InlineKeyboardButton(t(lang, "btn_new_search"), callback_data="res:new")],
         [InlineKeyboardButton(t(lang, "btn_flex"), callback_data="res:flex"),
-         InlineKeyboardButton(t(lang, "btn_refresh"), callback_data="res:refresh"),
          InlineKeyboardButton(t(lang, "btn_filters"), callback_data="res:filters")],
-        [InlineKeyboardButton(t(lang, "btn_track"), callback_data="res:track")],
     ])
 
 
@@ -167,6 +172,7 @@ async def _send_photo(bot, chat_id: int, png: bytes, caption: Optional[str] = No
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = _lang(context)
     await _reply(update, responses.welcome(lang), _main_kb(lang))
+    return ConversationHandler.END
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -209,8 +215,13 @@ def _now_tick() -> int:
 
 async def search_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = _lang(context)
-    context.user_data["draft"] = {"pax": Passengers()}
-    await _reply(update, t(lang, "ask_from"), _main_kb(lang))
+    context.user_data["draft"] = {"pax": Passengers(), "roundtrip": False}
+    text = t(lang, "ask_from")
+    if update.message is not None:
+        await _reply(update, text, _main_kb(lang))
+    elif update.callback_query is not None:
+        await update.callback_query.answer()
+        await _edit(update.callback_query, text)
     return FROM
 
 
@@ -248,7 +259,7 @@ async def to_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     draft = context.user_data["draft"]
     draft["d"] = geo.airport(query.data.split(":")[1])
     lang = _lang(context)
-    text = responses.route_line(draft["o"], draft["d"]) + "\n\n" + t(lang, "pax_prompt")
+    text = responses.route_line(draft["o"], draft["d"]) + "\n\n" + responses.pax_card(lang, draft["pax"])
     await _edit(query, text, _pax_kb(lang, draft["pax"]))
     return PAX
 
@@ -265,8 +276,10 @@ async def pax_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return PAX
     if data == "px:go":
         today = _dt.date.today()
-        draft.update({"y": today.year, "m": today.month, "dep": None, "ret": None})
-        await _edit(query, responses.dates_prompt(lang, None, None), _calendar_kb(today.year, today.month, []))
+        draft.update({"y": today.year, "m": today.month, "dep": None, "ret": None,
+                      "roundtrip": draft.get("roundtrip", False)})
+        await _edit(query, responses.dates_prompt(lang, None, None, draft["roundtrip"]),
+                    _calendar_kb(today.year, today.month, [], draft["roundtrip"]))
         return DATES
 
     field = {"a": "adults", "c": "children", "i": "infants"}.get(data.split(":")[1])
@@ -275,7 +288,10 @@ async def pax_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("px:cab"):
         pax = cycle_cabin(pax, 1 if data.endswith("+") else -1)
     draft["pax"] = pax
-    await query.edit_message_reply_markup(_pax_kb(lang, pax))
+    route = ""
+    if draft.get("o") and draft.get("d"):
+        route = responses.route_line(draft["o"], draft["d"]) + "\n\n"
+    await _edit(query, route + responses.pax_card(lang, pax), _pax_kb(lang, pax))
     return PAX
 
 
@@ -288,23 +304,43 @@ async def dates_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "cal:x":
         return DATES
+    if data in ("cal:trip:ow", "cal:trip:rt"):
+        draft["roundtrip"] = data.endswith("rt")
+        if not draft["roundtrip"]:
+            draft["ret"] = None
+        selected = [d for d in (draft.get("dep"), draft.get("ret")) if d]
+        await _edit(query, responses.dates_prompt(lang, draft.get("dep"), draft.get("ret"), draft["roundtrip"]),
+                    _calendar_kb(draft["y"], draft["m"], selected, draft["roundtrip"]))
+        return DATES
+    if data in ("cal:today", "cal:tomorrow"):
+        day = _dt.date.today() + _dt.timedelta(days=0 if data == "cal:today" else 1)
+        draft["dep"] = day
+        if not draft.get("roundtrip"):
+            draft["ret"] = None
+        draft["y"], draft["m"] = day.year, day.month
+        selected = [d for d in (draft.get("dep"), draft.get("ret")) if d]
+        await _edit(query, responses.dates_prompt(lang, draft.get("dep"), draft.get("ret"), draft.get("roundtrip")),
+                    _calendar_kb(day.year, day.month, selected, draft.get("roundtrip", False)))
+        return DATES
     if data.startswith("cal:nav:"):
         y, m = map(int, data.split(":")[2].split("-"))
         draft["y"], draft["m"] = y, m
         selected = [d for d in (draft.get("dep"), draft.get("ret")) if d]
-        await query.edit_message_reply_markup(_calendar_kb(y, m, selected))
+        await query.edit_message_reply_markup(_calendar_kb(y, m, selected, draft.get("roundtrip", False)))
         return DATES
     if data.startswith("cal:day:"):
         day = _dt.date.fromisoformat(data.split(":", 2)[2])
-        if not draft.get("dep") or (draft.get("dep") and draft.get("ret")):
+        if not draft.get("roundtrip"):
+            draft["dep"], draft["ret"] = day, None
+        elif not draft.get("dep") or (draft.get("dep") and draft.get("ret")):
             draft["dep"], draft["ret"] = day, None
         elif day < draft["dep"]:
             draft["dep"] = day
         else:
             draft["ret"] = day
         selected = [d for d in (draft.get("dep"), draft.get("ret")) if d]
-        await _edit(query, responses.dates_prompt(lang, draft.get("dep"), draft.get("ret")),
-                    _calendar_kb(draft["y"], draft["m"], selected))
+        await _edit(query, responses.dates_prompt(lang, draft.get("dep"), draft.get("ret"), draft.get("roundtrip")),
+                    _calendar_kb(draft["y"], draft["m"], selected, draft.get("roundtrip", False)))
         return DATES
     if data == "cal:done":
         if not draft.get("dep"):
@@ -324,11 +360,14 @@ async def _run_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     pax: Passengers = draft["pax"]
     results = _service.search(draft["o"].code, draft["d"].code, draft["dep"], pax=pax, tick=_now_tick())
+    back = []
+    if draft.get("ret"):
+        back = _service.search(draft["d"].code, draft["o"].code, draft["ret"], pax=pax, tick=_now_tick())
     context.user_data["search"] = {
-        "o_code": draft["o"].code, "o_city": draft["o"].city,
-        "d_code": draft["d"].code, "d_city": draft["d"].city,
+        "o_code": draft["o"].code, "o_city": draft["o"].display_city,
+        "d_code": draft["d"].code, "d_city": draft["d"].display_city,
         "dep": draft["dep"], "ret": draft.get("ret"), "pax": pax,
-        "filters": Filters(), "results": results, "page": 0,
+        "filters": Filters(), "results": results, "back": back, "page": 0,
     }
     await _show_results(query, context, edit=True)
     return ConversationHandler.END
@@ -349,12 +388,14 @@ def _results_text(lang: str, search: dict) -> str:
         return responses.no_results_text(lang, search["filters"].active)
     page = search["page"]
     offer = results[page]
+    back_list = search.get("back") or []
+    back = back_list[min(page, len(back_list) - 1)] if back_list else None
     header = responses.results_header(lang, search["o_city"], search["d_city"], search["dep"],
                                       search["pax"], page, len(results), search["filters"])
-    body = responses.format_offer(lang, offer)
+    body = responses.format_offer(lang, offer, back=back)
     trend = pricing.price_trend(pricing.route_key(offer.itinerary.origin, offer.itinerary.destination), offer.tick)
     advice = responses.price_advice_text(lang, trend)
-    return header + "\n\n" + body + (("\n\n" + advice) if advice else "")
+    return header + "\n\n" + body + (("\n" + advice) if advice else "")
 
 
 async def _show_results(query, context, edit: bool):
@@ -464,16 +505,40 @@ async def range_shortcut(update: Update, context: ContextTypes.DEFAULT_TYPE):
                           charts.render_range_chart(search["o_city"], search["d_city"], points))
 
 
-async def track_shortcut(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat is None:
-        return
+async def discover(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from .flights import DISCOVER_DESTS
     lang = _lang(context)
-    price = await _add_track_from_search(update.effective_chat.id, context)
-    if price is None:
-        await _reply(update, t(lang, "start_search_first"))
-        return
-    s = context.user_data["search"]
-    await _reply(update, responses.track_added_text(lang, s["o_city"], s["d_city"], s["dep"], s["pax"], price))
+    origin, city = "MOW", "Москва"
+    search = context.user_data.get("search")
+    draft = context.user_data.get("draft") or {}
+    if search:
+        origin, city = search["o_code"], search["o_city"]
+    elif draft.get("o") is not None:
+        origin, city = draft["o"].code, draft["o"].display_city
+    date = _dt.date.today() + _dt.timedelta(days=21)
+    deals = []
+    for dest in DISCOVER_DESTS:
+        if dest == origin:
+            continue
+        if not geo.airport(dest) and dest not in geo.resolve_airports(dest):
+            continue
+        offers = _service.search(origin, dest, date, tick=_now_tick(), limit=1)
+        if offers:
+            deals.append(offers[0])
+    deals.sort(key=lambda p: p.price_total)
+    await _reply(update, responses.discover_text(lang, city, deals[:8]), _main_kb(lang))
+
+
+async def cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = _lang(context)
+    n = 0
+    if update.effective_chat is not None:
+        n = len(_tracker.list_for(update.effective_chat.id))
+    await _reply(update, responses.cabinet_text(lang, n), _main_kb(lang))
+
+
+async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _reply(update, responses.premium_text(_lang(context)), _main_kb(_lang(context)))
 
 
 # --- price-tracking job ----------------------------------------------------
@@ -500,6 +565,18 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _post_init(application: Application) -> None:
     me = await application.bot.get_me()
     logger.info("Connected to Telegram as @%s (id=%s)", me.username, me.id)
+    await application.bot.set_my_commands([
+        BotCommand("start", "Главное меню"),
+        BotCommand("search", "Найти билеты"),
+        BotCommand("discover", "Куда улететь дешево"),
+        BotCommand("alerts", "Мои алерты"),
+        BotCommand("calendar", "Календарь цен"),
+        BotCommand("cabinet", "Кабинет"),
+        BotCommand("premium", "Подписка"),
+        BotCommand("language", "Язык"),
+        BotCommand("help", "Помощь"),
+        BotCommand("cancel", "Отмена"),
+    ])
     if application.job_queue is not None:
         application.job_queue.run_repeating(_poll_prices, interval=TRACK_INTERVAL_SECONDS, first=TRACK_INTERVAL_SECONDS)
         logger.info("Price tracking every %ss", TRACK_INTERVAL_SECONDS)
@@ -512,6 +589,7 @@ def build_application(token: str) -> Application:
         entry_points=[
             CommandHandler("search", search_start),
             MessageHandler(filters.Regex(_any_lang_regex("kb_search")), search_start),
+            CallbackQueryHandler(search_start, pattern="^res:new$"),
         ],
         states={
             FROM: [CallbackQueryHandler(from_pick, pattern="^cf:"),
@@ -521,7 +599,12 @@ def build_application(token: str) -> Application:
             PAX: [CallbackQueryHandler(pax_cb, pattern="^px:")],
             DATES: [CallbackQueryHandler(dates_cb, pattern="^cal:")],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("start", start),
+            MessageHandler(filters.Regex(_any_lang_regex("kb_help")), help_command),
+            MessageHandler(filters.Regex(_any_lang_regex("kb_lang")), language_command),
+        ],
         allow_reentry=True,
     )
 
@@ -530,9 +613,18 @@ def build_application(token: str) -> Application:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("language", language_command))
     application.add_handler(CommandHandler("hot", hot))
+    application.add_handler(CommandHandler("discover", discover))
+    application.add_handler(CommandHandler("alerts", mytracks))
     application.add_handler(CommandHandler("mytracks", mytracks))
-    application.add_handler(MessageHandler(filters.Regex(_any_lang_regex("kb_range")), range_shortcut))
-    application.add_handler(MessageHandler(filters.Regex(_any_lang_regex("kb_track")), track_shortcut))
+    application.add_handler(CommandHandler("calendar", range_shortcut))
+    application.add_handler(CommandHandler("cabinet", cabinet))
+    application.add_handler(CommandHandler("premium", premium))
+    application.add_handler(MessageHandler(filters.Regex(_any_lang_regex("kb_discover")), discover))
+    application.add_handler(MessageHandler(filters.Regex(_any_lang_regex("kb_alerts")), mytracks))
+    application.add_handler(MessageHandler(filters.Regex(_any_lang_regex("kb_calendar")), range_shortcut))
+    application.add_handler(MessageHandler(filters.Regex(_any_lang_regex("kb_cabinet")), cabinet))
+    application.add_handler(MessageHandler(filters.Regex(_any_lang_regex("kb_premium")), premium))
+    application.add_handler(MessageHandler(filters.Regex(_any_lang_regex("kb_help")), help_command))
     application.add_handler(MessageHandler(filters.Regex(_any_lang_regex("kb_lang")), language_command))
     application.add_handler(CallbackQueryHandler(language_cb, pattern="^lng:"))
     application.add_handler(CallbackQueryHandler(results_cb, pattern="^res:"))

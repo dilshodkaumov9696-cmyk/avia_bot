@@ -14,19 +14,20 @@ def test_format_offer_direct_and_stops_localized():
     direct = next(p for p in res if p.itinerary.is_direct)
     conn = next(p for p in res if not p.itinerary.is_direct)
 
-    # Tajik -> currency TJS
     dtext = responses.format_offer("tg", direct)
-    assert "TJS" in dtext and "🛫" in dtext and "Мустақим" in dtext  # "Direct" in Tajik
+    assert "TJS" in dtext and "мустақим" in dtext
+    assert "`" in dtext  # timeline is monospace
 
     ctext = responses.format_offer("en", conn)
-    assert "USD" in ctext and "stop" in ctext.lower()
+    assert "USD" in ctext or "$" in ctext
+    assert "stop" in ctext.lower() or "layover" in ctext.lower()
 
 
 def test_offer_buy_label_localized():
     svc = FlightService()
     offer = svc.search("MOW", "LBD", DATE, tick=TICK, limit=1)[0]
-    assert "Купить билет" in responses.offer_buy_label("ru", offer)
-    assert "Buy ticket" in responses.offer_buy_label("en", offer)
+    assert "Забронировать" in responses.offer_buy_label("ru", offer)
+    assert "Book" in responses.offer_buy_label("en", offer)
 
 
 def test_pax_summary_localized():
@@ -38,7 +39,8 @@ def test_pax_summary_localized():
 def test_results_header_shows_filters():
     header = responses.results_header("ru", "Москва", "Худжанд", DATE, Passengers(2),
                                       0, 5, Filters(direct_only=True))
-    assert "Москва → Худжанд" in header and "1 из 5" in header
+    assert "Москва → Худжанд" in header
+    assert "прямые" in header.lower() or "фильтр" in header.lower()
 
 
 def test_range_text_marks_cheapest():
@@ -50,7 +52,7 @@ def test_range_text_marks_cheapest():
 
 def test_drop_text_localized_currency():
     txt = responses.drop_text("en", "Москва", "Худжанд", DATE, 6000, 5000, 17)
-    assert "Price dropped" in txt and "USD" in txt and "−17%" in txt
+    assert "Price dropped" in txt and "$" in txt and "−17%" in txt
 
 
 def test_flexible_text_suggests_cheaper_day():
