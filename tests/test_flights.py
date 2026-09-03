@@ -35,6 +35,16 @@ def test_baggage_filter():
     svc = FlightService()
     bag = svc.search("MOW", "LBD", DATE, tick=TICK, filters=Filters(with_baggage=True))
     assert all(p.itinerary.baggage for p in bag)
+    nobag = svc.search("MOW", "LBD", DATE, tick=TICK, filters=Filters(without_baggage=True))
+    assert nobag
+    assert all(not p.itinerary.baggage for p in nobag)
+
+
+def test_connecting_filter():
+    svc = FlightService()
+    hops = svc.search("MOW", "LBD", DATE, tick=TICK, filters=Filters(connecting_only=True))
+    assert hops
+    assert all(not p.itinerary.is_direct for p in hops)
 
 
 def test_has_connections_with_layover_info():

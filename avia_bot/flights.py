@@ -138,18 +138,24 @@ class Priced:
 @dataclass
 class Filters:
     direct_only: bool = False
+    connecting_only: bool = False
     with_baggage: bool = False
+    without_baggage: bool = False
 
     def matches(self, it: Itinerary) -> bool:
         if self.direct_only and not it.is_direct:
             return False
+        if self.connecting_only and it.is_direct:
+            return False
         if self.with_baggage and not it.baggage:
+            return False
+        if self.without_baggage and it.baggage:
             return False
         return True
 
     @property
     def active(self) -> bool:
-        return self.direct_only or self.with_baggage
+        return self.direct_only or self.connecting_only or self.with_baggage or self.without_baggage
 
 
 def _seed(*parts) -> int:

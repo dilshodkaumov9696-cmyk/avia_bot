@@ -29,6 +29,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -168,11 +169,20 @@ def _results_kb(lang: str, search: dict) -> InlineKeyboardMarkup:
 
 def _filters_kb(lang: str, f: Filters) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"{'✅' if f.direct_only else '⬜'} {t(lang, 'flt_direct')}", callback_data="flt:direct")],
-        [InlineKeyboardButton(f"{'✅' if f.with_baggage else '⬜'} {t(lang, 'flt_bag')}", callback_data="flt:bag")],
+        [InlineKeyboardButton(f"{'✅' if f.direct_only else '⬜'} {t(lang, 'flt_direct')}", callback_data="flt:direct"),
+         InlineKeyboardButton(f"{'✅' if f.connecting_only else '⬜'} {t(lang, 'flt_connect')}", callback_data="flt:connect")],
+        [InlineKeyboardButton(f"{'✅' if f.with_baggage else '⬜'} {t(lang, 'flt_bag')}", callback_data="flt:bag"),
+         InlineKeyboardButton(f"{'✅' if f.without_baggage else '⬜'} {t(lang, 'flt_nobag')}", callback_data="flt:nobag")],
         [InlineKeyboardButton(t(lang, "flt_apply"), callback_data="flt:apply"),
          InlineKeyboardButton(t(lang, "flt_reset"), callback_data="flt:reset")],
     ])
+
+
+def _png_file(png: bytes, name: str) -> InputFile:
+    buf = io.BytesIO(png)
+    buf.name = name
+    buf.seek(0)
+    return InputFile(buf, filename=name)
 
 
 # --- send helpers ----------------------------------------------------------
@@ -476,34 +486,54 @@ async def _show_results(query, context, edit: bool):
     offer = search["results"][page]
     back_list = search.get("back") or []
     back = back_list[min(page, len(back_list) - 1)] if back_list else None
-    png = tickets.render_ticket(lang, offer, back=back)
+    n = len(search["results"])
+    png = tickets.render_ticket(lang, offer, back=back, page=page + 1, total=n)
     markup = _results_kb(lang, search)
     message = query.message
+    filename = f"ticket_{page + 1}_of_{n}.png"
 
-    if edit and _is_photo_message(message):
-        await query.edit_message_media(
-            InputMediaPhoto(media=InputFile(io.BytesIO(png), filename="ticket.png"),
-                            caption=html, parse_mode=ParseMode.HTML),
+    async def _send_new() -> None:
+        chat_id = message.chat_id if message is not None else None
+        if chat_id is None:
+            return
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=_png_file(png, filename),
+            caption=html,
+            parse_mode=ParseMode.HTML,
             reply_markup=markup,
         )
-        return
+
+    if edit and _is_photo_message(message):
+        try:
+            await query.edit_message_media(
+                InputMediaPhoto(
+                    media=_png_file(png, filename),
+                    caption=html,
+                    parse_mode=ParseMode.HTML,
+                ),
+                reply_markup=markup,
+            )
+            return
+        except BadRequest as exc:
+            logger.warning("edit_message_media failed (%s); sending a new card", exc)
+            try:
+                await message.delete()
+            except Exception:  # noqa: BLE001
+                pass
+            await _send_new()
+            return
 
     if edit and message is not None:
         try:
             await message.delete()
         except Exception:  # noqa: BLE001
             logger.debug("Could not delete search-progress message")
-        await context.bot.send_photo(
-            chat_id=message.chat_id,
-            photo=InputFile(io.BytesIO(png), filename="ticket.png"),
-            caption=html,
-            parse_mode=ParseMode.HTML,
-            reply_markup=markup,
-        )
+        await _send_new()
         return
 
     await message.reply_photo(
-        photo=InputFile(io.BytesIO(png), filename="ticket.png"),
+        photo=_png_file(png, filename),
         caption=html,
         parse_mode=ParseMode.HTML,
         reply_markup=markup,
@@ -523,7 +553,11 @@ async def results_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "res:x":
         return
     if data in ("res:next", "res:prev"):
-        _, search["page"], _ = paginate(search["results"], search["page"] + (1 if data == "res:next" else -1))
+        _, search["page"], _ = paginate(
+            search["results"],
+            search["page"] + (1 if data == "res:next" else -1),
+            wrap=True,
+        )
         await _show_results(query, context, edit=True)
     elif data == "res:refresh":
         search["results"] = _service.search(search["o_code"], search["d_code"], search["dep"],
@@ -554,9 +588,23 @@ async def filters_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     if data == "flt:direct":
         f.direct_only = not f.direct_only
+        if f.direct_only:
+            f.connecting_only = False
+        await query.edit_message_reply_markup(_filters_kb(lang, f))
+    elif data == "flt:connect":
+        f.connecting_only = not f.connecting_only
+        if f.connecting_only:
+            f.direct_only = False
         await query.edit_message_reply_markup(_filters_kb(lang, f))
     elif data == "flt:bag":
         f.with_baggage = not f.with_baggage
+        if f.with_baggage:
+            f.without_baggage = False
+        await query.edit_message_reply_markup(_filters_kb(lang, f))
+    elif data == "flt:nobag":
+        f.without_baggage = not f.without_baggage
+        if f.without_baggage:
+            f.with_baggage = False
         await query.edit_message_reply_markup(_filters_kb(lang, f))
     elif data in ("flt:apply", "flt:reset"):
         if data == "flt:reset":

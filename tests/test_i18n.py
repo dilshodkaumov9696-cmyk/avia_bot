@@ -36,6 +36,16 @@ def test_translation_uses_language_when_present():
     assert i18n.t("uz", "adults") == "Kattalar"
 
 
+def test_welcome_exists_in_every_language():
+    seen = set()
+    for lang in i18n.LANGS:
+        text = i18n.STRINGS["welcome"][lang]
+        assert "AviaBot" in text
+        assert text not in seen
+        seen.add(text)
+        assert i18n.t(lang, "welcome") == text
+
+
 def test_fmt_date_per_language():
     d = dt.date(2026, 9, 17)
     assert i18n.fmt_date("ru", d) == "17 сентября"

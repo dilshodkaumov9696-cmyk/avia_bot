@@ -41,11 +41,14 @@ def cycle_cabin(pax: Passengers, delta: int) -> Passengers:
     return Passengers(pax.adults, pax.children, pax.infants, CABIN_ORDER[idx])
 
 
-def paginate(items: Sequence[T], page: int, per_page: int = 1) -> Tuple[List[T], int, int]:
+def paginate(items: Sequence[T], page: int, per_page: int = 1, *, wrap: bool = False) -> Tuple[List[T], int, int]:
     """Return (page_items, clamped_page, total_pages) with 0-based page index."""
 
     total = len(items)
     total_pages = max(1, (total + per_page - 1) // per_page)
-    page = max(0, min(page, total_pages - 1))
+    if wrap and total:
+        page = page % total_pages
+    else:
+        page = max(0, min(page, total_pages - 1))
     start = page * per_page
     return list(items[start:start + per_page]), page, total_pages

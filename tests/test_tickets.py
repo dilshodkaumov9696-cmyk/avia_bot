@@ -10,7 +10,7 @@ DATE = dt.date(2026, 9, 17)
 def test_ticket_card_embeds_airline_logo():
     svc = FlightService()
     offer = svc.search("MOW", "LBD", DATE, tick=1000, limit=1)[0]
-    png = tickets.render_ticket("ru", offer)
+    png = tickets.render_ticket("ru", offer, page=2, total=15)
     assert png.startswith(PNG_MAGIC)
     assert len(png) > 8000
     assert offer.itinerary.airline_iata

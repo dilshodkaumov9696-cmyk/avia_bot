@@ -206,14 +206,19 @@ def format_offer(lang: str, priced: Priced, back: Optional[Priced] = None) -> st
 
 def results_header(lang: str, origin: str, destination: str, date: _dt.date,
                    pax: pricing.Passengers, page: int, total_pages: int, filters: Filters) -> str:
+    head = t(lang, "variant", i=page + 1, n=total_pages)
     if not filters.active:
-        return ""
+        return head
     flags = []
     if filters.direct_only:
         flags.append(t(lang, "flt_direct").lower())
+    if filters.connecting_only:
+        flags.append(t(lang, "flt_connect").lower())
     if filters.with_baggage:
         flags.append(t(lang, "flt_bag").lower())
-    return t(lang, "filters_label", f=", ".join(flags))
+    if filters.without_baggage:
+        flags.append(t(lang, "flt_nobag").lower())
+    return head + "\n" + t(lang, "filters_label", f=", ".join(flags))
 
 
 def no_results_text(lang: str, filters_active: bool) -> str:

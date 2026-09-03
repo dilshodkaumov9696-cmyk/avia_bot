@@ -40,6 +40,7 @@ def test_pax_summary_localized():
 def test_results_header_shows_filters():
     header = responses.results_header("ru", "Москва", "Худжанд", DATE, Passengers(2),
                                       0, 5, Filters(direct_only=True))
+    assert "вариант" in header.lower() or "1" in header
     assert "фильтр" in header.lower() or "прямые" in header.lower()
 
 

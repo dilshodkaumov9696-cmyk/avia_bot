@@ -45,8 +45,9 @@ def _load_logo(iata: str):
         return None
 
 
-def render_ticket(lang: str, priced: Priced, back: Optional[Priced] = None) -> bytes:
-    """Paint a receipt-style card with the operating airline's logo."""
+def render_ticket(lang: str, priced: Priced, back: Optional[Priced] = None,
+                  page: Optional[int] = None, total: Optional[int] = None) -> bytes:
+    """Paint a compact receipt card with a small airline logo."""
 
     it = priced.itinerary
     air = airlines.get(it.airline_iata) or airlines.get(it.airline)
@@ -60,59 +61,64 @@ def render_ticket(lang: str, priced: Priced, back: Optional[Priced] = None) -> b
     if priced.is_fastest:
         tags.append(t(lang, "tag_fastest"))
 
-    fig, ax = plt.subplots(figsize=(7.4, 4.15), dpi=140)
-    fig.patch.set_facecolor("#eef1f6")
+    fig, ax = plt.subplots(figsize=(7.1, 3.55), dpi=140)
+    fig.patch.set_facecolor("#e8edf4")
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
     ax.add_patch(FancyBboxPatch(
-        (0.02, 0.04), 0.96, 0.92,
-        boxstyle="round,pad=0.012,rounding_size=0.04",
+        (0.018, 0.035), 0.964, 0.93,
+        boxstyle="round,pad=0.01,rounding_size=0.035",
         linewidth=0, facecolor="#ffffff",
     ))
 
     logo = _load_logo(iata)
     if logo is not None:
-        imagebox = OffsetImage(logo, zoom=1.35)
-        ax.add_artist(AnnotationBbox(imagebox, (0.11, 0.84), frameon=False))
-        name_x = 0.22
+        imagebox = OffsetImage(logo, zoom=0.52)
+        ax.add_artist(AnnotationBbox(imagebox, (0.085, 0.86), frameon=False))
+        name_x = 0.155
     else:
         ax.add_patch(FancyBboxPatch(
-            (0.055, 0.74), 0.12, 0.16,
-            boxstyle="round,pad=0.008,rounding_size=0.02",
+            (0.05, 0.79), 0.07, 0.12,
+            boxstyle="round,pad=0.004,rounding_size=0.015",
             linewidth=0, facecolor="#1d3557",
         ))
-        ax.text(0.115, 0.82, iata or "✈", ha="center", va="center",
-                fontsize=13, color="white", fontweight="bold")
-        name_x = 0.22
+        ax.text(0.085, 0.85, iata or "✈", ha="center", va="center",
+                fontsize=8, color="white", fontweight="bold")
+        name_x = 0.155
 
-    ax.text(name_x, 0.88, name, ha="left", va="center",
-            fontsize=13, color="#1d3557")
-    ax.text(name_x, 0.78, flight, ha="left", va="center",
-            fontsize=10, color="#6c757d")
+    ax.text(name_x, 0.895, name, ha="left", va="center",
+            fontsize=11, color="#1d3557")
+    ax.text(name_x, 0.805, flight, ha="left", va="center",
+            fontsize=8.5, color="#6c757d")
+    right = []
+    if page is not None and total:
+        right.append(f"{page} / {total}")
     if tags:
-        ax.text(0.94, 0.88, " · ".join(tags), ha="right", va="center",
-                fontsize=9, color="#2a9d8f")
+        right.append(" · ".join(tags))
+    if right:
+        ax.text(0.94, 0.86, "   ".join(right), ha="right", va="center",
+                fontsize=8.5, color="#2a9d8f")
 
-    ax.text(0.06, 0.62, money(lang, priced.price_total),
-            ha="left", va="center", fontsize=22, color="#1d3557", fontweight="bold")
+    ax.text(0.055, 0.64, money(lang, priced.price_total),
+            ha="left", va="center", fontsize=20, color="#1d3557", fontweight="bold")
 
     arrow = "⇄" if back is not None else "→"
-    ax.text(0.06, 0.48, _city(it.origin), ha="left", va="center", fontsize=12, color="#212529")
-    ax.text(0.50, 0.48, arrow, ha="center", va="center", fontsize=16, color="#457b9d")
-    ax.text(0.94, 0.48, _city(it.destination), ha="right", va="center", fontsize=12, color="#212529")
+    ax.text(0.055, 0.48, _city(it.origin), ha="left", va="center", fontsize=11, color="#212529")
+    ax.text(0.50, 0.48, arrow, ha="center", va="center", fontsize=14, color="#457b9d")
+    ax.text(0.945, 0.48, _city(it.destination), ha="right", va="center", fontsize=11, color="#212529")
 
-    ax.text(0.06, 0.36, fmt_time(it.dep), ha="left", va="center",
-            fontsize=16, color="#1d3557", fontweight="bold")
-    ax.text(0.94, 0.36, fmt_time(it.arr), ha="right", va="center",
-            fontsize=16, color="#1d3557", fontweight="bold")
-    ax.text(0.06, 0.28, _apt(it.origin), ha="left", va="center", fontsize=8.5, color="#6c757d")
-    ax.text(0.94, 0.28, _apt(it.destination), ha="right", va="center", fontsize=8.5, color="#6c757d")
+    ax.text(0.055, 0.355, fmt_time(it.dep), ha="left", va="center",
+            fontsize=15, color="#1d3557", fontweight="bold")
+    ax.text(0.945, 0.355, fmt_time(it.arr), ha="right", va="center",
+            fontsize=15, color="#1d3557", fontweight="bold")
+    ax.text(0.055, 0.27, _apt(it.origin), ha="left", va="center", fontsize=8, color="#6c757d")
+    ax.text(0.945, 0.27, _apt(it.destination), ha="right", va="center", fontsize=8, color="#6c757d")
 
     stop = t(lang, "direct") if it.is_direct else t(lang, "stops_n", n=it.stops)
     mid = f"{it.duration_str}  ·  {stop}"
-    ax.plot([0.28, 0.72], [0.365, 0.365], color="#ced4da", linewidth=1.2)
-    ax.text(0.50, 0.31, mid, ha="center", va="center", fontsize=9, color="#6c757d")
+    ax.plot([0.30, 0.70], [0.36, 0.36], color="#ced4da", linewidth=1.0)
+    ax.text(0.50, 0.295, mid, ha="center", va="center", fontsize=8.5, color="#6c757d")
 
     bag = t(lang, "bag_yes") if it.baggage else t(lang, "bag_no")
     date_s = fmt_date_short(lang, it.dep.date())
@@ -121,11 +127,11 @@ def render_ticket(lang: str, priced: Priced, back: Optional[Priced] = None) -> b
     if priced.pax.total > 1:
         date_s += f"  ·  {responses.pax_summary(lang, priced.pax)}"
     footer = f"{date_s}  ·  {bag}"
-    ax.text(0.06, 0.14, footer, ha="left", va="center", fontsize=9.5, color="#495057")
+    ax.text(0.055, 0.13, footer, ha="left", va="center", fontsize=8.5, color="#495057")
     if back is not None:
         b = back.itinerary
-        ax.text(0.94, 0.14, f"{t(lang, 'label_return')}  {fmt_time(b.dep)}–{fmt_time(b.arr)}",
-                ha="right", va="center", fontsize=9, color="#495057")
+        ax.text(0.945, 0.13, f"{t(lang, 'label_return')}  {fmt_time(b.dep)}–{fmt_time(b.arr)}",
+                ha="right", va="center", fontsize=8, color="#495057")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=140, facecolor=fig.get_facecolor())

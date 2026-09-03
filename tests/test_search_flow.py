@@ -34,3 +34,7 @@ def test_paginate():
     # clamps out of range
     assert paginate(items, 99, per_page=1)[1] == 4
     assert paginate(items, -3, per_page=1)[1] == 0
+    _, wrapped, _ = paginate(items, 5, per_page=1, wrap=True)
+    assert wrapped == 0
+    _, back, _ = paginate(items, -1, per_page=1, wrap=True)
+    assert back == 4

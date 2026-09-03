@@ -165,6 +165,20 @@ def test_filters_apply_rebuilds_results():
     assert all(p.itinerary.is_direct for p in context.user_data["search"]["results"])
 
 
+def test_filter_connecting_and_no_bag_toggles():
+    context = _ctx()
+    search = _make_search()
+    context.user_data["search"] = search
+    u, q = _cb_update("flt:connect")
+    asyncio.run(bot.filters_cb(u, context))
+    assert search["filters"].connecting_only is True
+    assert search["filters"].direct_only is False
+    u2, q2 = _cb_update("flt:nobag")
+    asyncio.run(bot.filters_cb(u2, context))
+    assert search["filters"].without_baggage is True
+    assert search["filters"].with_baggage is False
+
+
 def test_language_callback_sets_language():
     context = _ctx()
     u, q = _cb_update("lng:uz")
