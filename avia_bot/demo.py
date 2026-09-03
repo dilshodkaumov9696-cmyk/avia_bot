@@ -15,7 +15,7 @@ import datetime as _dt
 import os
 from typing import Optional
 
-from . import charts, geo, i18n, pricing, responses
+from . import charts, geo, i18n, pricing, responses, tickets
 from .flights import Filters, FlightService
 from .pricing import Passengers
 from .tracking import PriceTracker
@@ -53,6 +53,9 @@ def _run_lang(service, tracker, lang: str, charts_dir: Optional[str]) -> None:
         os.makedirs(charts_dir, exist_ok=True)
         with open(os.path.join(charts_dir, f"range_{lang}.png"), "wb") as fh:
             fh.write(charts.render_range_chart(origin.display_city, dest.display_city, points))
+        offer = results[0]
+        with open(os.path.join(charts_dir, f"ticket_{lang}.png"), "wb") as fh:
+            fh.write(tickets.render_ticket(lang, offer))
 
 
 def run(charts_dir: Optional[str] = None, langs=("ru", "uz", "en")) -> None:

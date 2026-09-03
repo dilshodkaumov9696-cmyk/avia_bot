@@ -54,7 +54,8 @@ Required order:
 3. **Date** — short (`чт, 17 сен`), passengers only if more than one adult.
 4. **Times** — human lines, not `SVO ——— 5ч ——— LBD`:
    `09:40  Шереметьево (SVO)` / `16:00  Худжанд (LBD)` / `в пути 5ч 20м · прямой`.
-5. **Meta** — airline · bags, one quiet line.
+5. **Airline** — real logo on the ticket *photo*, plus `Аэрофлот · SU 142 · багаж`
+   in the caption. Never a bare carrier string without IATA.
 
 Never stack more than one emoji per line. Prefer typography over emoji.
 Do not prefix every line with an icon (`💰 🛫 📅 🕐 🧳`).

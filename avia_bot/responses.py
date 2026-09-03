@@ -12,7 +12,7 @@ import html as _html
 import re as _re
 from typing import Optional, Sequence, Tuple
 
-from . import geo, i18n, pricing
+from . import airlines, geo, i18n, pricing
 from .flights import Filters, Priced, fmt_duration
 from .geo import Airport
 from .i18n import fmt_date, fmt_date_short, fmt_time, money, t
@@ -195,8 +195,12 @@ def format_offer(lang: str, priced: Priced, back: Optional[Priced] = None) -> st
         lines.append(_leg_block(lang, back.itinerary))
 
     bag = t(lang, "bag_yes") if it.baggage else t(lang, "bag_no")
+    carrier = airlines.display_name(it.airline_iata or it.airline, lang)
+    iata = airlines.iata_of(it.airline_iata or it.airline)
+    fn = it.flight_no
+    flight = f"{iata} {fn[len(iata):]}" if iata and fn.startswith(iata) else fn
     lines.append("")
-    lines.append(f"{it.airline}  ·  {bag}")
+    lines.append(f"{carrier}  ·  {flight}  ·  {bag}")
     return "\n".join(lines)
 
 

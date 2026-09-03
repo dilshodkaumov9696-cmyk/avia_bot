@@ -14,14 +14,11 @@ import random
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from . import geo, pricing
+from . import airlines, geo, pricing
+from .airlines import Airline
 from .pricing import Passengers
 
-AIRLINES = [
-    "S7 Airlines", "Аэрофлот", "Победа", "Уральские авиалинии",
-    "Utair", "Turkish Airlines", "Somon Air", "Uzbekistan Airways",
-    "Emirates", "Qatar Airways", "Lufthansa", "Air France",
-]
+AIRLINES = list(airlines.AIRLINES)
 HUBS = ["IST", "DXB", "DOH", "FRA", "AMS", "CDG", "LHR", "JFK",
         "SIN", "LED", "TAS", "ALA", "SVO", "AUH", "DEL", "WAW"]
 
@@ -55,6 +52,7 @@ class Leg:
     to_code: str
     dep: _dt.datetime
     arr: _dt.datetime
+    airline_iata: str = ""
 
 
 @dataclass(frozen=True)
@@ -91,6 +89,14 @@ class Itinerary:
     @property
     def airline(self) -> str:
         return self.legs[0].airline
+
+    @property
+    def airline_iata(self) -> str:
+        return self.legs[0].airline_iata or airlines.iata_of(self.legs[0].airline)
+
+    @property
+    def flight_no(self) -> str:
+        return self.legs[0].flight_no
 
     @property
     def duration_min(self) -> int:
@@ -182,10 +188,15 @@ class FlightService:
             dep_hour = (6 + i * 7 + rnd.randint(0, 3)) % 24
             dep = _dt.datetime.combine(date, _dt.time(dep_hour, rnd.choice([0, 5, 25, 30, 45])))
             arr = dep + _dt.timedelta(minutes=direct_minutes)
-            airline = rnd.choice(AIRLINES)
+            carrier: Airline = rnd.choice(AIRLINES)
             results.append(
                 Itinerary(
-                    legs=(Leg(airline, f"{airline[:2].upper()}{rnd.randint(100, 999)}", origin, destination, dep, arr),),
+                    legs=(Leg(
+                        carrier.display(),
+                        f"{carrier.iata}{rnd.randint(100, 999)}",
+                        origin, destination, dep, arr,
+                        airline_iata=carrier.iata,
+                    ),),
                     baggage=rnd.random() > 0.35,
                     seats_left=rnd.randint(2, 9),
                     base_price=rnd.randint(2600, 3600),
@@ -204,12 +215,14 @@ class FlightService:
             dep2 = arr1 + _dt.timedelta(minutes=layover)
             m2 = _leg_minutes(hub, destination)
             arr2 = dep2 + _dt.timedelta(minutes=m2)
-            airline = rnd.choice(AIRLINES)
+            carrier: Airline = rnd.choice(AIRLINES)
             results.append(
                 Itinerary(
                     legs=(
-                        Leg(airline, f"{airline[:2].upper()}{rnd.randint(100, 999)}", origin, hub, dep, arr1),
-                        Leg(airline, f"{airline[:2].upper()}{rnd.randint(100, 999)}", hub, destination, dep2, arr2),
+                        Leg(carrier.display(), f"{carrier.iata}{rnd.randint(100, 999)}",
+                            origin, hub, dep, arr1, airline_iata=carrier.iata),
+                        Leg(carrier.display(), f"{carrier.iata}{rnd.randint(100, 999)}",
+                            hub, destination, dep2, arr2, airline_iata=carrier.iata),
                     ),
                     baggage=rnd.random() > 0.5,
                     seats_left=rnd.randint(2, 9),

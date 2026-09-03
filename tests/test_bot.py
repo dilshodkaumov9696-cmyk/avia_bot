@@ -32,7 +32,13 @@ def _cb_update(data, chat_id=1):
     query.data = data
     query.message = MagicMock()
     query.message.chat_id = chat_id
+    query.message.photo = None
+    query.message.delete = AsyncMock()
     query.message.reply_text = AsyncMock()
+    query.message.reply_photo = AsyncMock()
+    query.message.chat = MagicMock()
+    query.message.chat.send_message = AsyncMock()
+    query.edit_message_media = AsyncMock()
     update.callback_query = query
     update.message = None
     update.effective_chat = MagicMock(id=chat_id)
@@ -146,7 +152,7 @@ def test_results_pagination():
     u, q = _cb_update("res:next")
     asyncio.run(bot.results_cb(u, context))
     assert context.user_data["search"]["page"] == 1
-    q.edit_message_text.assert_awaited()
+    context.bot.send_photo.assert_awaited()
 
 
 def test_filters_apply_rebuilds_results():

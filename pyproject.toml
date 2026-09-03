@@ -20,4 +20,4 @@ addopts = "-q"
 packages = ["avia_bot"]
 
 [tool.setuptools.package-data]
-avia_bot = ["data/*"]
+avia_bot = ["data/*", "data/logos/*"]

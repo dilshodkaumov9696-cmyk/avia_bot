@@ -23,6 +23,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputFile,
+    InputMediaPhoto,
     KeyboardButton,
     ReplyKeyboardMarkup,
     Update,
@@ -38,7 +39,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import calendar_ui, charts, geo, i18n, pricing, responses
+from . import calendar_ui, charts, geo, i18n, pricing, responses, tickets
 from .flights import Filters, FlightService
 from .i18n import t
 from .pricing import Passengers
@@ -182,8 +183,24 @@ async def _reply(update: Update, text: str, markup=None) -> None:
         await update.message.reply_text(responses.render_html(text), parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
+def _is_photo_message(message) -> bool:
+    return bool(getattr(message, "photo", None))
+
+
 async def _edit(query, text: str, markup=None) -> None:
-    await query.edit_message_text(responses.render_html(text), parse_mode=ParseMode.HTML, reply_markup=markup)
+    html = responses.render_html(text)
+    message = query.message
+    if _is_photo_message(message):
+        if message is not None:
+            try:
+                await message.delete()
+            except Exception:  # noqa: BLE001
+                logger.debug("Could not delete photo message before text replace")
+            chat = getattr(message, "chat", None)
+            if chat is not None:
+                await chat.send_message(html, parse_mode=ParseMode.HTML, reply_markup=markup)
+                return
+    await query.edit_message_text(html, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 async def _send_photo(bot, chat_id: int, png: bytes, caption: Optional[str] = None) -> None:
@@ -444,12 +461,53 @@ def _results_text(lang: str, search: dict) -> str:
 async def _show_results(query, context, edit: bool):
     lang = _lang(context)
     search = context.user_data["search"]
-    markup = _results_kb(lang, search) if search["results"] else None
     text = _results_text(lang, search)
-    if edit:
-        await _edit(query, text, markup)
-    else:
-        await query.message.reply_text(responses.render_html(text), parse_mode=ParseMode.HTML, reply_markup=markup)
+    html = responses.render_html(text)
+    if len(html) > 1024:
+        html = html[:1020] + "…"
+    if not search["results"]:
+        if edit:
+            await _edit(query, text)
+        else:
+            await query.message.reply_text(html, parse_mode=ParseMode.HTML)
+        return
+
+    page = search["page"]
+    offer = search["results"][page]
+    back_list = search.get("back") or []
+    back = back_list[min(page, len(back_list) - 1)] if back_list else None
+    png = tickets.render_ticket(lang, offer, back=back)
+    markup = _results_kb(lang, search)
+    message = query.message
+
+    if edit and _is_photo_message(message):
+        await query.edit_message_media(
+            InputMediaPhoto(media=InputFile(io.BytesIO(png), filename="ticket.png"),
+                            caption=html, parse_mode=ParseMode.HTML),
+            reply_markup=markup,
+        )
+        return
+
+    if edit and message is not None:
+        try:
+            await message.delete()
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not delete search-progress message")
+        await context.bot.send_photo(
+            chat_id=message.chat_id,
+            photo=InputFile(io.BytesIO(png), filename="ticket.png"),
+            caption=html,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+        return
+
+    await message.reply_photo(
+        photo=InputFile(io.BytesIO(png), filename="ticket.png"),
+        caption=html,
+        parse_mode=ParseMode.HTML,
+        reply_markup=markup,
+    )
 
 
 async def results_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):

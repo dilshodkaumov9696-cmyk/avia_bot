@@ -8,6 +8,8 @@ The engine is pure and synchronous so it runs without a live Telegram connection
 - ``calendar_ui`` — inline calendar model.
 - ``search_flow`` — passenger/cabin math + pagination.
 - ``tracking``    — price-tracking store + drop detection.
+- ``airlines``    — IATA catalog + bundled carrier logos.
+- ``tickets``     — PNG ticket card with the airline logo.
 - ``charts``      — matplotlib price charts.
 - ``responses``   — RU prompts + result cards (rendered to HTML).
 - ``bot``         — the Telegram wiring (guided ConversationHandler).
