@@ -61,7 +61,16 @@ def test_unknown_city_returns_empty():
     assert geo.search_cities("Атлантида") == []
 
 
-def test_button_label_is_short():
+def test_button_label_has_flag_and_is_short():
     svo = geo.airport("SVO")
-    assert svo.option_text.startswith("SVO")
+    assert svo.option_text.startswith("🇷🇺")
+    assert "SVO" in svo.option_text
+    assert "Шереметьево" in svo.option_text
     assert len(svo.option_text) <= 64
+
+
+def test_flag_emoji():
+    assert geo.flag_emoji("RU") == "🇷🇺"
+    assert geo.flag_emoji("TJ") == "🇹🇯"
+    assert geo.flag_emoji("GB") == "🇬🇧"
+    assert geo.flag_emoji("") == "🏳️"

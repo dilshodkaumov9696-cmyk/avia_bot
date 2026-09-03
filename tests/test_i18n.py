@@ -32,7 +32,7 @@ def test_translation_fallback_to_ru():
 
 
 def test_translation_uses_language_when_present():
-    assert i18n.t("en", "kb_search") == "Find tickets"
+    assert i18n.t("en", "kb_search") == "🔎 Find tickets"
     assert i18n.t("uz", "adults") == "Kattalar"
 
 

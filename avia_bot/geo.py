@@ -28,6 +28,17 @@ def _norm(text: str) -> str:
     return " ".join(text.split())
 
 
+def flag_emoji(cc: str) -> str:
+    """ISO 3166-1 alpha-2 → flag emoji (regional indicators)."""
+
+    cc = (cc or "").upper()
+    if cc == "UK":
+        cc = "GB"
+    if len(cc) != 2 or not cc.isalpha():
+        return "🏳️"
+    return "".join(chr(0x1F1E6 + ord(c) - 65) for c in cc)
+
+
 @dataclass(frozen=True)
 class Airport:
     code: str
@@ -56,17 +67,24 @@ class Airport:
         return self.country_name_ru or self.country_name or self.country
 
     @property
-    def option_text(self) -> str:
-        """Short button label: ``SVO · Шереметьево, Москва``."""
+    def flag(self) -> str:
+        return flag_emoji(self.country)
 
+    @property
+    def option_text(self) -> str:
+        """Inline-button label: ``🇷🇺 SVO · Шереметьево`` (Telegram max 64)."""
+
+        flag = self.flag
         if self.is_metro:
-            return f"{self.code} · {self.display_city}, все аэропорты"
-        name = self.display_name
-        city = self.display_city
-        if name and city and name.casefold() != city.casefold():
-            label = f"{self.code} · {name}, {city}"
+            core = f"{self.code} · {self.display_city}, все аэропорты"
         else:
-            label = f"{self.code} · {city}"
+            name = self.display_name
+            city = self.display_city
+            if name and city and name.casefold() != city.casefold():
+                core = f"{self.code} · {name}"
+            else:
+                core = f"{self.code} · {city}"
+        label = f"{flag} {core}"
         return label[:64]
 
 

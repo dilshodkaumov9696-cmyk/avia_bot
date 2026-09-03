@@ -60,7 +60,7 @@ def run(charts_dir: Optional[str] = None, langs=("ru", "uz", "en")) -> None:
     tracker = PriceTracker(service)
 
     _p("Шаг 1–4. Города, пассажиры, дата (как в боте)")
-    print("Откуда: Москва →", [a.code for a in geo.search_cities("Москва")])
+    print("Откуда: Москва →", [a.option_text for a in geo.search_cities("Москва")])
     print("Куда:   Худжанд →", [a.code for a in geo.search_cities("Худжанд")])
     print("IATA:   LED →", [a.code for a in geo.search_cities("LED")])
     print("Страна: Япония →", [a.code for a in geo.search_cities("Япония")][:5])

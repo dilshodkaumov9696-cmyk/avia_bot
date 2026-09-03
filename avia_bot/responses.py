@@ -1,8 +1,8 @@
 """Language-aware reply builders shared by the bot and the offline demo.
 
-Ticket cards are designed as receipts: price first, then a monospace timeline,
-then one quiet meta line. Markup is ``*bold*`` / `` `code` ``, rendered to
-Telegram-safe HTML by :func:`render_html`.
+Ticket cards are receipts: price, cities with flags, times, airline.
+Markup is ``*bold*`` / `` `code` ``, rendered to Telegram-safe HTML by
+:func:`render_html`.
 """
 
 from __future__ import annotations
@@ -53,21 +53,38 @@ def help_text(lang: str) -> str:
     return t(lang, "help")
 
 
-def route_line(origin: Airport, destination: Airport) -> str:
-    return f"{origin.display_city} → {destination.display_city}"
+def route_line(origin: Airport, destination: Airport, roundtrip: bool = False) -> str:
+    arrow = "⇄" if roundtrip else "→"
+    return f"{origin.flag} {origin.display_city} {arrow} {destination.flag} {destination.display_city}"
 
 
 def route_line_from(origin: Airport) -> str:
-    return f"{origin.display_city} ({origin.code})"
+    return f"{origin.flag} {origin.display_city}  ({origin.code})"
+
+
+def airport_choice_text(lang: str, query: str, n: int, *, departing: bool) -> str:
+    prompt = t(lang, "choose_from" if departing else "choose_to")
+    q = (query or "").strip()
+    if not q:
+        return prompt
+    return f"*{q}*\n{prompt}"
 
 
 def dates_prompt(lang: str, dep: Optional[_dt.date], ret: Optional[_dt.date],
-                 roundtrip: bool = False) -> str:
+                 roundtrip: bool = False, origin: Optional[Airport] = None,
+                 destination: Optional[Airport] = None) -> str:
+    lines = [f"*{t(lang, 'dates_hint')}*"]
+    if origin and destination:
+        lines.append(route_line(origin, destination, roundtrip=roundtrip))
+    lines.append("")
     dep_s = fmt_date(lang, dep) if dep else "—"
-    lines = [f"*{t(lang, 'dates_hint')}*", "", f"{t(lang, 'label_depart')}    {dep_s}"]
+    lines.append(f"{t(lang, 'label_depart')}     {dep_s}")
     if roundtrip:
         ret_s = fmt_date(lang, ret) if ret else "—"
-        lines.append(f"{t(lang, 'label_return')}    {ret_s}")
+        lines.append(f"{t(lang, 'label_return')}  {ret_s}")
+        if not ret:
+            lines.append("")
+            lines.append(t(lang, "dates_rt_hint"))
     return "\n".join(lines)
 
 
@@ -110,22 +127,36 @@ def pax_card(lang: str, pax: pricing.Passengers) -> str:
     ])
 
 
-def _city(code: str) -> str:
+def _place(code: str) -> str:
     apt = geo.airport(code)
-    return apt.display_city if apt else code
+    if not apt:
+        return code
+    return f"{apt.flag} {apt.display_city}"
 
 
-def _leg_timeline_lang(lang: str, it) -> str:
-    if it.is_direct:
-        o, d = it.origin, it.destination
-        top = f"{o}  {fmt_time(it.dep)}  ———  {it.duration_str}  ———  {fmt_time(it.arr)}  {d}"
-        return f"`{top}`\n{_city(o)} · {_city(d)}"
-    lines = []
-    for leg in it.legs:
-        lines.append(f"`{leg.from_code}  {fmt_time(leg.dep)}  →  {fmt_time(leg.arr)}  {leg.to_code}`")
-    bits = [t(lang, "layover_in", t=fmt_duration(lay), city=city) for city, lay in it.stop_infos()]
-    if bits:
-        lines.append(" · ".join(bits))
+def _apt_name(code: str) -> str:
+    apt = geo.airport(code)
+    if not apt:
+        return code
+    if apt.is_metro:
+        return apt.display_city
+    name = apt.display_name
+    if name and name.casefold() != apt.display_city.casefold():
+        return f"{name} ({code})"
+    return f"{apt.display_city} ({code})"
+
+
+def _leg_block(lang: str, it) -> str:
+    stop_label = t(lang, "direct") if it.is_direct else t(lang, "stops_n", n=it.stops)
+    lines = [
+        f"{fmt_time(it.dep)}  {_apt_name(it.origin)}",
+        f"{fmt_time(it.arr)}  {_apt_name(it.destination)}",
+        f"{t(lang, 'in_flight', t=it.duration_str)}  ·  {stop_label}",
+    ]
+    if not it.is_direct:
+        bits = [t(lang, "layover_in", t=fmt_duration(lay), city=city) for city, lay in it.stop_infos()]
+        if bits:
+            lines.insert(2, " · ".join(bits))
     return "\n".join(lines)
 
 
@@ -141,41 +172,44 @@ def format_offer(lang: str, priced: Priced, back: Optional[Priced] = None) -> st
     if priced.is_fastest:
         tags.append(t(lang, "tag_fastest"))
 
+    arrow = "⇄" if back is not None else "→"
     lines = [f"*{money(lang, priced.price_total)}*"]
     if tags:
         lines.append(" · ".join(tags))
     lines.append("")
-    lines.append(_leg_timeline_lang(lang, it))
+    lines.append(f"{_place(it.origin)} {arrow} {_place(it.destination)}")
+
+    date_line = fmt_date_short(lang, it.dep.date())
+    if back is not None:
+        date_line += f"  →  {fmt_date_short(lang, back.itinerary.dep.date())}"
+    if priced.pax.total > 1:
+        date_line += f"  ·  {pax_summary(lang, priced.pax)}"
+    lines.append(date_line)
+    lines.append("")
+    if back is not None:
+        lines.append(t(lang, "label_depart"))
+    lines.append(_leg_block(lang, it))
     if back is not None:
         lines.append("")
-        lines.append(t(lang, "leg_back"))
-        lines.append(_leg_timeline_lang(lang, back.itinerary))
+        lines.append(t(lang, "label_return"))
+        lines.append(_leg_block(lang, back.itinerary))
 
-    stop_label = t(lang, "direct") if it.is_direct else t(lang, "stops_n", n=it.stops)
     bag = t(lang, "bag_yes") if it.baggage else t(lang, "bag_no")
     lines.append("")
-    lines.append(f"{it.airline}  ·  {stop_label}  ·  {bag}")
-    lines.append(fmt_date_short(lang, it.dep.date()))
-    if priced.pax.total > 1:
-        lines.append(pax_summary(lang, priced.pax))
-    lines.append("")
-    lines.append(t(lang, "footnote_cache"))
+    lines.append(f"{it.airline}  ·  {bag}")
     return "\n".join(lines)
 
 
 def results_header(lang: str, origin: str, destination: str, date: _dt.date,
                    pax: pricing.Passengers, page: int, total_pages: int, filters: Filters) -> str:
-    head = f"{origin} → {destination}  ·  {fmt_date_short(lang, date)}"
-    if pax.total > 1:
-        head += f"  ·  {pax_summary(lang, pax)}"
-    if filters.active:
-        flags = []
-        if filters.direct_only:
-            flags.append(t(lang, "flt_direct").lower())
-        if filters.with_baggage:
-            flags.append(t(lang, "flt_bag").lower())
-        head += "\n" + t(lang, "filters_label", f=", ".join(flags))
-    return head
+    if not filters.active:
+        return ""
+    flags = []
+    if filters.direct_only:
+        flags.append(t(lang, "flt_direct").lower())
+    if filters.with_baggage:
+        flags.append(t(lang, "flt_bag").lower())
+    return t(lang, "filters_label", f=", ".join(flags))
 
 
 def no_results_text(lang: str, filters_active: bool) -> str:
@@ -221,7 +255,7 @@ def hot_text(lang: str, deals: Sequence[Priced]) -> str:
     for p in deals:
         it = p.itinerary
         lines.append(
-            f"{_city(it.origin)} → {_city(it.destination)}"
+            f"{_place(it.origin)} → {_place(it.destination)}"
             f"    *{money(lang, p.price_total)}*"
             + (f"  −{p.discount_pct}%" if p.discount_pct > 0 else "")
         )
@@ -234,7 +268,7 @@ def discover_text(lang: str, origin_city: str, deals: Sequence[Priced]) -> str:
     lines = [f"*{t(lang, 'discover_title')}*", origin_city, ""]
     for p in deals:
         it = p.itinerary
-        lines.append(f"{_city(it.destination)}    *{money(lang, p.price_total)}*")
+        lines.append(f"{_place(it.destination)}    *{money(lang, p.price_total)}*")
     return "\n".join(lines)
 
 

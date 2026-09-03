@@ -16,7 +16,8 @@ def test_format_offer_direct_and_stops_localized():
 
     dtext = responses.format_offer("tg", direct)
     assert "TJS" in dtext and "мустақим" in dtext
-    assert "`" in dtext  # timeline is monospace
+    assert "→" in dtext or "⇄" in dtext
+    assert "Шереметьево" in dtext or "Москва" in dtext or "SVO" in dtext
 
     ctext = responses.format_offer("en", conn)
     assert "USD" in ctext or "$" in ctext
@@ -39,8 +40,18 @@ def test_pax_summary_localized():
 def test_results_header_shows_filters():
     header = responses.results_header("ru", "Москва", "Худжанд", DATE, Passengers(2),
                                       0, 5, Filters(direct_only=True))
-    assert "Москва → Худжанд" in header
-    assert "прямые" in header.lower() or "фильтр" in header.lower()
+    assert "фильтр" in header.lower() or "прямые" in header.lower()
+
+
+def test_format_offer_looks_like_a_ticket():
+    svc = FlightService()
+    offer = svc.search("MOW", "LBD", DATE, tick=TICK, limit=1)[0]
+    text = responses.format_offer("ru", offer)
+    assert "₽" in text
+    assert "🇷🇺" in text
+    assert "Туда:" not in text and "origin" not in text
+    assert "кэш" not in text.lower()
+    assert "———" not in text
 
 
 def test_range_text_marks_cheapest():

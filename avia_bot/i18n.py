@@ -101,6 +101,30 @@ def fmt_time(value: _dt.datetime) -> str:
     return f"{value:%H:%M}"
 
 
+_WEEKDAYS = {
+    "ru": ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
+    "en": ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
+}
+_MONTHS_CAL = {
+    "ru": ["", "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+           "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"],
+    "en": ["", "January", "February", "March", "April", "May", "June",
+           "July", "August", "September", "October", "November", "December"],
+}
+
+
+def weekdays(lang: str) -> List[str]:
+    return list(_WEEKDAYS.get(normalize(lang), _WEEKDAYS["ru"]))
+
+
+def months_cal(lang: str) -> List[str]:
+    return list(_MONTHS_CAL.get(normalize(lang), _MONTHS_CAL["ru"]))
+
+
+def placeholder_search(lang: str) -> str:
+    return t(lang, "placeholder_search")
+
+
 # --- string catalog --------------------------------------------------------
 # Each key maps lang -> template. Missing langs fall back to "ru", then the key.
 
@@ -134,15 +158,15 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "be": "Адкуль ляціце? Горад, краіна або код (SVO).",
     },
     "choose_from": {
-        "ru": "Выберите из списка откуда отправляетесь",
-        "tg": "Аз рӯйхат интихоб кунед, ки аз куҷо парвоз мекунед",
-        "uz": "Roʻyxatdan qayerdan uchishingizni tanlang",
-        "ky": "Тизмеден кайдан учаарыңызды тандаңыз",
-        "kk": "Тізімнен қайдан ұшатыныңызды таңдаңыз",
-        "tk": "Sanawdan nireden ugraýanyňyzy saýlaň",
-        "az": "Siyahıdan haradan uçduğunuzu seçin",
-        "be": "Выберыце са спісу адкуль вылятаеце",
-        "en": "Choose your departure from the list",
+        "ru": "Нажмите аэропорт вылета ↓",
+        "tg": "Фурудгоҳи парвозро пахш кунед ↓",
+        "uz": "Joʻnash aeroportini bosing ↓",
+        "ky": "Учуу аэропортун басыңыз ↓",
+        "kk": "Ұшу әуежайын басыңыз ↓",
+        "tk": "Uçuş aeroportyny basyň ↓",
+        "az": "Uçuş hava limanına toxunun ↓",
+        "be": "Націсніце аэрапорт вылету ↓",
+        "en": "Tap your departure airport ↓",
     },
     "ask_to": {
         "ru": "Куда летите?\nТоже город, страна, аэропорт или код",
@@ -153,10 +177,39 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "az": "Hara?", "be": "Куды ляціце?",
     },
     "choose_to": {
-        "ru": "Выберите из списка куда летите",
-        "uz": "Roʻyxatdan qayerga uchishingizni tanlang",
-        "tg": "Аз рӯйхат интихоб кунед, ки ба куҷо парвоз мекунед",
-        "en": "Choose your destination from the list",
+        "ru": "Нажмите аэропорт прилёта ↓",
+        "uz": "Kelish aeroportini bosing ↓",
+        "tg": "Фурудгоҳи нишастро пахш кунед ↓",
+        "en": "Tap your arrival airport ↓",
+    },
+    "placeholder_search": {
+        "ru": "Город, страна, аэропорт или код",
+        "uz": "Shahar, mamlakat, aeroport yoki kod",
+        "tg": "Шаҳр, кишвар, фурудгоҳ ё код",
+        "en": "City, country, airport or code",
+    },
+    "cal_ow": {
+        "ru": "➝  одна", "uz": "➝  bir tomon", "tg": "➝  як самт",
+        "en": "➝  one-way",
+    },
+    "cal_rt": {
+        "ru": "⇄  туда-обратно", "uz": "⇄  borish-qaytish", "tg": "⇄  рафтуомад",
+        "en": "⇄  round-trip",
+    },
+    "cal_today": {"ru": "Сегодня", "uz": "Bugun", "tg": "Имрӯз", "en": "Today"},
+    "cal_tomorrow": {"ru": "Завтра", "uz": "Ertaga", "tg": "Фардо", "en": "Tomorrow"},
+    "cal_plus3": {"ru": "+3 дня", "uz": "+3 kun", "tg": "+3 рӯз", "en": "+3 days"},
+    "cal_plus7": {"ru": "+7 дней", "uz": "+7 kun", "tg": "+7 рӯз", "en": "+7 days"},
+    "cal_clear": {"ru": "Сбросить", "uz": "Tozalash", "tg": "Тоза", "en": "Clear"},
+    "cal_done": {"ru": "Найти билеты", "uz": "Qidirish", "tg": "Ҷустуҷӯ", "en": "Search"},
+    "cal_pick": {"ru": "Выберите дату", "uz": "Sanani tanlang", "tg": "Санаро интихоб кунед",
+                 "en": "Pick a date"},
+    "cal_find": {"ru": "Найти · {d}", "uz": "Qidir · {d}", "tg": "Ҷӯй · {d}", "en": "Search · {d}"},
+    "dates_rt_hint": {
+        "ru": "Сначала вылет, затем обратную — или сразу «Найти».",
+        "uz": "Avval uchish, soʻng qaytish — yoki darhol «Qidirish».",
+        "tg": "Аввал парвоз, баъд бозгашт — ё якбора «Ҷустуҷӯ».",
+        "en": "Pick outbound, then return — or search right away.",
     },
     "city_not_found": {
         "ru": "Ничего не нашёл. Попробуйте иначе: Москва, Турция, Хитроу или LED.",
@@ -189,10 +242,10 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "ab_child": {"ru": "дет.", "uz": "bol.", "tg": "кӯд.", "en": "ch."},
     "ab_infant": {"ru": "млад.", "uz": "chaq.", "tg": "навз.", "en": "inf."},
     "dates_hint": {
-        "ru": "Дата вылета",
-        "uz": "Uchish sanasi",
-        "tg": "Санаи парвоз",
-        "en": "Departure date",
+        "ru": "Когда летите",
+        "uz": "Qachon uchasiz",
+        "tg": "Кай парвоз",
+        "en": "When do you fly",
     },
     "label_depart": {"ru": "Туда", "uz": "Borish", "tg": "Рафтан", "en": "Outbound"},
     "label_return": {"ru": "Обратно", "uz": "Qaytish", "tg": "Бозгашт", "en": "Return"},
@@ -231,24 +284,24 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "flt_reset": {"ru": "Сбросить", "uz": "Tozalash", "tg": "Тоза кардан", "en": "Reset"},
     "flt_title": {"ru": "⚙️ Фильтры поиска:", "uz": "⚙️ Qidiruv filtrlari:", "tg": "⚙️ Филтрҳои ҷустуҷӯ:",
                   "en": "⚙️ Search filters:"},
-    "kb_search": {"ru": "Найти билеты", "uz": "Chipta qidirish", "tg": "Ҷустуҷӯи чипта",
-                  "ky": "Билет издөө", "kk": "Билет іздеу", "tk": "Bilet gözle",
-                  "az": "Bilet axtar", "be": "Знайсці квіткі", "en": "Find tickets"},
-    "kb_discover": {"ru": "Куда улететь дешево", "uz": "Arzon yoʻnalishlar",
-                    "tg": "Сафарҳои арзон", "en": "Where to fly cheap"},
-    "kb_alerts": {"ru": "Мои алерты", "uz": "Alertlarim", "tg": "Огоҳиҳои ман",
-                  "en": "My alerts"},
-    "kb_calendar": {"ru": "Календарь цен", "uz": "Narx kalendari", "tg": "Тақвими нарх",
-                    "en": "Price calendar"},
-    "kb_cabinet": {"ru": "Кабинет", "uz": "Kabinet", "tg": "Кабинет", "en": "Account"},
-    "kb_premium": {"ru": "Подписка", "uz": "Obuna", "tg": "Обуна", "en": "Premium"},
-    "kb_lang": {"ru": "Язык", "uz": "Til", "tg": "Забон", "ky": "Тил", "kk": "Тіл",
-                "tk": "Dil", "az": "Dil", "be": "Мова", "en": "Language"},
-    "kb_help": {"ru": "Помощь", "uz": "Yordam", "tg": "Кӯмак", "en": "Help"},
-    "kb_range": {"ru": "Календарь цен", "uz": "Narx kalendari", "tg": "Тақвими нарх",
-                 "en": "Price calendar"},
-    "kb_track": {"ru": "Мои алерты", "uz": "Alertlarim", "tg": "Огоҳиҳои ман",
-                 "en": "My alerts"},
+    "kb_search": {"ru": "🔎 Найти билеты", "uz": "🔎 Chipta qidirish", "tg": "🔎 Ҷустуҷӯи чипта",
+                  "ky": "🔎 Билет издөө", "kk": "🔎 Билет іздеу", "tk": "🔎 Bilet gözle",
+                  "az": "🔎 Bilet axtar", "be": "🔎 Знайсці квіткі", "en": "🔎 Find tickets"},
+    "kb_discover": {"ru": "🌍 Куда улететь", "uz": "🌍 Arzon yoʻnalishlar",
+                    "tg": "🌍 Сафарҳои арзон", "en": "🌍 Where to fly"},
+    "kb_alerts": {"ru": "🔔 Мои алерты", "uz": "🔔 Alertlarim", "tg": "🔔 Огоҳиҳои ман",
+                  "en": "🔔 My alerts"},
+    "kb_calendar": {"ru": "📅 Календарь цен", "uz": "📅 Narx kalendari", "tg": "📅 Тақвими нарх",
+                    "en": "📅 Price calendar"},
+    "kb_cabinet": {"ru": "👤 Кабинет", "uz": "👤 Kabinet", "tg": "👤 Кабинет", "en": "👤 Account"},
+    "kb_premium": {"ru": "⭐ Подписка", "uz": "⭐ Obuna", "tg": "⭐ Обуна", "en": "⭐ Premium"},
+    "kb_lang": {"ru": "🌐 Язык", "uz": "🌐 Til", "tg": "🌐 Забон", "ky": "🌐 Тил", "kk": "🌐 Тіл",
+                "tk": "🌐 Dil", "az": "🌐 Dil", "be": "🌐 Мова", "en": "🌐 Language"},
+    "kb_help": {"ru": "❓ Помощь", "uz": "❓ Yordam", "tg": "❓ Кӯмак", "en": "❓ Help"},
+    "kb_range": {"ru": "📅 Календарь цен", "uz": "📅 Narx kalendari", "tg": "📅 Тақвими нарх",
+                 "en": "📅 Price calendar"},
+    "kb_track": {"ru": "🔔 Мои алерты", "uz": "🔔 Alertlarim", "tg": "🔔 Огоҳиҳои ман",
+                 "en": "🔔 My alerts"},
     "variant": {"ru": "Вариант {i} из {n}", "uz": "{i}-variant / {n}", "tg": "Вариант {i} аз {n}",
                 "en": "Option {i} of {n}"},
     "filters_label": {"ru": "⚙️ Фильтры: {f}", "uz": "⚙️ Filtrlar: {f}", "tg": "⚙️ Филтрҳо: {f}",
@@ -297,10 +350,10 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "tr_now": {"ru": "сейчас", "uz": "hozir", "tg": "ҳозир", "en": "now"},
     "tr_min": {"ru": "мин", "uz": "min", "tg": "мин", "en": "min"},
     "tr_checks": {"ru": "пров.", "uz": "tekshiruv", "tg": "санҷиш", "en": "checks"},
-    "cancel": {"ru": "Отменил. Нажмите 🔎 Поиск, чтобы начать заново.",
-               "uz": "Bekor qilindi. Qaytadan boshlash uchun 🔎 Qidiruv.",
-               "tg": "Бекор шуд. Барои аз нав оғоз 🔎 Ҷустуҷӯ.",
-               "en": "Cancelled. Tap 🔎 Search to start again."},
+    "cancel": {"ru": "Отменил. Нажмите «Найти билеты», чтобы начать заново.",
+               "uz": "Bekor qilindi. Qaytadan boshlash uchun «Chipta qidirish».",
+               "tg": "Бекор шуд. Барои аз нав оғоз «Ҷустуҷӯи чипта».",
+               "en": "Cancelled. Tap Find tickets to start again."},
     "choose_language": {"ru": "🌐 Выберите язык (валюта подберётся автоматически):",
                         "uz": "🌐 Tilni tanlang (valyuta avtomatik tanlanadi):",
                         "tg": "🌐 Забонро интихоб кунед (асъор худкор интихоб мешавад):",
@@ -350,7 +403,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "bag_no": {"ru": "без багажа", "uz": "bagajsiz", "tg": "бе бор", "en": "no bags"},
     "direct": {"ru": "прямой", "uz": "toʻgʻri", "tg": "мустақим", "ky": "түз",
                "kk": "тікелей", "tk": "göni", "az": "birbaşa", "be": "прямы", "en": "direct"},
-    "leg_back": {"ru": "обратно", "uz": "qaytish", "tg": "бозгашт", "en": "return"},
+    "leg_back": {"ru": "Обратно", "uz": "Qaytish", "tg": "Бозгашт", "en": "Return"},
+    "in_flight": {"ru": "в пути {t}", "uz": "yoʻlda {t}", "tg": "дар роҳ {t}", "en": "{t} in flight"},
 }
 
 

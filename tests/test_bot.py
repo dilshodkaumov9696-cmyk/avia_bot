@@ -51,7 +51,20 @@ def test_from_text_offers_cities():
     context.user_data["draft"] = {"pax": Passengers()}
     state = asyncio.run(bot.from_text(update, context))
     assert state == bot.FROM
-    assert update.message.reply_text.call_args.kwargs["reply_markup"] is not None
+    markup = update.message.reply_text.call_args.kwargs["reply_markup"]
+    labels = [btn.text for row in markup.inline_keyboard for btn in row]
+    assert any("🇷🇺" in lb and "SVO" in lb for lb in labels)
+    assert any("MOW" in lb for lb in labels)
+
+
+def test_main_keyboard_stays_pretty_and_persistent():
+    kb = bot._main_kb("ru")
+    assert kb.is_persistent is True
+    texts = [btn.text for row in kb.keyboard for btn in row]
+    assert any("Мои алерты" in x for x in texts)
+    assert any("Кабинет" in x for x in texts)
+    assert any("Помощь" in x for x in texts)
+    assert len(kb.keyboard) == 4 and all(len(row) == 2 for row in kb.keyboard)
 
 
 def test_from_pick_then_to_pick_reach_pax():
@@ -80,6 +93,25 @@ def test_pax_increment_and_go():
     u2, q2 = _cb_update("px:go")
     assert asyncio.run(bot.pax_cb(u2, context)) == bot.DATES
     q2.edit_message_text.assert_awaited()
+
+
+def test_calendar_roundtrip_and_quick_buttons():
+    context = _ctx()
+    context.user_data["draft"] = {
+        "o": geo.airport("MOW"), "d": geo.airport("LBD"), "pax": Passengers(),
+        "y": 2026, "m": 9, "dep": None, "ret": None, "roundtrip": False,
+    }
+    u, q = _cb_update("cal:trip:rt")
+    assert asyncio.run(bot.dates_cb(u, context)) == bot.DATES
+    assert context.user_data["draft"]["roundtrip"] is True
+
+    u2, q2 = _cb_update("cal:plus:3")
+    assert asyncio.run(bot.dates_cb(u2, context)) == bot.DATES
+    assert context.user_data["draft"]["dep"] == dt.date.today() + dt.timedelta(days=3)
+
+    u3, q3 = _cb_update("cal:clear")
+    assert asyncio.run(bot.dates_cb(u3, context)) == bot.DATES
+    assert context.user_data["draft"]["dep"] is None
 
 
 def test_dates_pick_and_done_runs_search():
