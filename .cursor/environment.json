@@ -1,0 +1,4 @@
+{
+  "name": "avia_bot",
+  "install": "pip install --break-system-packages -r requirements-dev.txt"
+}
